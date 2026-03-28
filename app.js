@@ -7,6 +7,21 @@ const refreshBtn = document.getElementById("refreshBtn");
 
 let allAds = [];
 
+const DEV_SHOW_DUMMY_WHEN_EMPTY = true;
+const DEV_DUMMY_ADS = [
+  {
+    id: "dummy-iitk-ee-2026",
+    instituteType: "IIT",
+    institute: "IIT Kanpur",
+    role: "Assistant Professor / Associate Professor",
+    department: "Electrical Engineering, Electronics and Communication Engineering",
+    adDate: "28 Mar 2026",
+    deadline: "30 Apr 2026",
+    url: "https://www.iitk.ac.in/faculty-recruitment",
+    title: "Dummy current opening for card preview"
+  }
+];
+
 refreshBtn.addEventListener("click", loadAds);
 searchBox.addEventListener("input", render);
 
