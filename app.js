@@ -6,6 +6,7 @@ const searchBox = document.getElementById("searchBox");
 const refreshBtn = document.getElementById("refreshBtn");
 
 let allAds = [];
+const DEBUG_MODE = true;
 
 refreshBtn.addEventListener("click", loadAds);
 searchBox.addEventListener("input", render);
@@ -78,7 +79,20 @@ function renderCard(ad) {
       <p>Ad date ${escapeHtml(ad.adDate || "Not stated")} | Deadline ${escapeHtml(ad.deadline || "Not stated")}</p>
       <p class="${statusClass}">${escapeHtml(statusText)}</p>
       <p><a href="${escapeAttribute(ad.url || "#")}" target="_blank" rel="noopener noreferrer">Open advertisement</a></p>
+      ${DEBUG_MODE ? renderDebug(ad) : ""}
     </article>
+  `;
+}
+
+function renderDebug(ad) {
+  return `
+    <details class="debug-block">
+      <summary>Debug</summary>
+      <p><strong>Title</strong> ${escapeHtml(ad.title || "Not stated")}</p>
+      <p><strong>ID</strong> ${escapeHtml(ad.id || "Not stated")}</p>
+      <p><strong>URL</strong> <a href="${escapeAttribute(ad.url || "#")}" target="_blank" rel="noopener noreferrer">${escapeHtml(ad.url || "Not stated")}</a></p>
+      <p><strong>Source page</strong> <a href="${escapeAttribute(ad.sourcePage || "#")}" target="_blank" rel="noopener noreferrer">${escapeHtml(ad.sourcePage || "Not stated")}</a></p>
+    </details>
   `;
 }
 
