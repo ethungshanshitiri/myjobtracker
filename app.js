@@ -37,7 +37,10 @@ async function loadAds() {
     }
 
     const ads = await response.json();
-    allAds = Array.isArray(ads) ? ads : [];
+    const liveAds = Array.isArray(ads) ? ads : [];
+    allAds = liveAds.length === 0 && DEV_SHOW_DUMMY_WHEN_EMPTY
+      ? DEV_DUMMY_ADS
+      : liveAds;
     render();
   } catch (error) {
     summaryEl.textContent = "Could not load ads.";
@@ -56,7 +59,12 @@ function render() {
 
   const groups = sortInstituteGroups(groupByInstitute(filteredAds));
 
-  summaryEl.textContent = `${groups.length} institution${groups.length === 1 ? "" : "s"} shown`;
+  const usingDummy =
+  DEV_SHOW_DUMMY_WHEN_EMPTY &&
+  allAds.length === DEV_DUMMY_ADS.length &&
+  allAds.every((ad) => ad.id.startsWith("dummy-"));
+
+  summaryEl.textContent = `${groups.length} institution${groups.length === 1 ? "" : "s"} shown` + (usingDummy ? " (test card)" : "");
 
   if (groups.length === 0) {
     cardsEl.innerHTML = `<div class="empty">No current openings.</div>`;
