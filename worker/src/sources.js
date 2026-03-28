@@ -1,3 +1,53 @@
+export const DEPARTMENT_RULES = [
+  {
+    label: "Electrical Engineering",
+    patterns: [
+      /\belectrical engineering\b/i,
+      /\bdepartment of electrical engineering\b/i
+    ]
+  },
+  {
+    label: "Electronics Engineering",
+    patterns: [
+      /\belectronics engineering\b/i,
+      /\bdepartment of electronics engineering\b/i
+    ]
+  },
+  {
+    label: "Electrical and Electronics Engineering",
+    patterns: [
+      /\belectrical and electronics engineering\b/i,
+      /\bdepartment of electrical and electronics engineering\b/i,
+      /\beee\b/i
+    ]
+  },
+  {
+    label: "Electronics and Communication Engineering",
+    patterns: [
+      /\belectronics and communication engineering\b/i,
+      /\belectronics and communications engineering\b/i,
+      /\bdepartment of electronics and communication engineering\b/i,
+      /\bdepartment of electronics and communications engineering\b/i,
+      /\bece\b/i
+    ]
+  },
+  {
+    label: "Computer Science",
+    patterns: [
+      /\bcomputer science\b/i,
+      /\bdepartment of computer science\b/i
+    ]
+  },
+  {
+    label: "Computer Science and Engineering",
+    patterns: [
+      /\bcomputer science and engineering\b/i,
+      /\bdepartment of computer science and engineering\b/i,
+      /\bcse\b/i
+    ]
+  }
+];
+
 export const SOURCES = [
   {
     id: "iitd-jobs",
@@ -64,13 +114,13 @@ export const SOURCES = [
     batch: 1
   },
   {
-  id: "nitkkr-faculty",
-  instituteType: "NIT",
-  institute: "NIT Kurukshetra",
-  pageUrl: "https://nitkkr.ac.in/recruitment-notification-for-faculty-positions/",
-  pageType: "html-links",
-  batch: 1
-},
+    id: "nitrkl-faculty",
+    instituteType: "NIT",
+    institute: "NIT Rourkela",
+    pageUrl: "https://www.nitrkl.ac.in/Career/Faculty/",
+    pageType: "html-links",
+    batch: 2
+  },
   {
     id: "nitw-faculty",
     instituteType: "NIT",
@@ -88,21 +138,21 @@ export const SOURCES = [
     batch: 1
   },
   {
-  id: "vnit-current-openings",
-  instituteType: "NIT",
-  institute: "VNIT Nagpur",
-  pageUrl: "https://vnit.ac.in/position-open/",
-  pageType: "html-links",
-  batch: 2
-},
+    id: "vnit-current-openings",
+    instituteType: "NIT",
+    institute: "VNIT Nagpur",
+    pageUrl: "https://vnit.ac.in/position-open/",
+    pageType: "html-links",
+    batch: 2
+  },
   {
-  id: "nitmz-recruitment-feed",
-  instituteType: "NIT",
-  institute: "NIT Mizoram",
-  pageUrl: "https://nitmz.ac.in/",
-  pageType: "html-links",
-  batch: 0
-},
+    id: "nitmz-recruitment-feed",
+    instituteType: "NIT",
+    institute: "NIT Mizoram",
+    pageUrl: "https://nitmz.ac.in/",
+    pageType: "html-links",
+    batch: 0
+  },
   {
     id: "nitkkr-faculty",
     instituteType: "NIT",
