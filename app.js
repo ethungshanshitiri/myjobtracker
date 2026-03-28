@@ -6,7 +6,6 @@ const searchBox = document.getElementById("searchBox");
 const refreshBtn = document.getElementById("refreshBtn");
 
 let allAds = [];
-const DEBUG_MODE = true;
 
 refreshBtn.addEventListener("click", loadAds);
 searchBox.addEventListener("input", render);
@@ -34,79 +33,190 @@ async function loadAds() {
 function render() {
   const query = searchBox.value.trim().toLowerCase();
 
-  const filtered = allAds.filter((ad) => {
-    const haystack = `${ad.institute || ""} ${ad.department || ""} ${ad.role || ""}`.toLowerCase();
-    return haystack.includes(query);
-  });
+  const filteredAds = allAds
+    .filter(isRelevantOpening)
+    .filter((ad) => {
+      const haystack =
+        `${ad.institute || ""} ${ad.department || ""} ${ad.role || ""} ${ad.title || ""}`.toLowerCase();
+      return haystack.includes(query);
+    });
 
-  summaryEl.textContent = `${filtered.length} advertisement${filtered.length === 1 ? "" : "s"} shown`;
+  const groups = sortInstituteGroups(groupByInstitute(filteredAds));
 
-  if (filtered.length === 0) {
-    cardsEl.innerHTML = `<div class="empty">No matching advertisements.</div>`;
+  summaryEl.textContent = `${groups.length} institution${groups.length === 1 ? "" : "s"} shown`;
+
+  if (groups.length === 0) {
+    cardsEl.innerHTML = `<div class="empty">No matching openings.</div>`;
     return;
   }
 
-  cardsEl.innerHTML = filtered.map(renderCard).join("");
+  cardsEl.innerHTML = groups.map(renderInstituteCard).join("");
 }
 
-function renderCard(ad) {
-  const days = daysLeft(ad.deadline);
+function isRelevantOpening(ad) {
+  const text = `${ad.title || ""} ${ad.role || ""} ${ad.department || ""}`.toLowerCase();
 
-  let statusClass = "";
-  let statusText = "Days left not available";
+  const excludePatterns = [
+    /\bshortlisted\b/,
+    /\bshortlist\b/,
+    /\binterview schedule\b/,
+    /\bteaching presentation\b/,
+    /\bscreening test\b/,
+    /\bsyllabus\b/,
+    /\bconstitution\b/,
+    /\bjrf\b/,
+    /\bshort term course\b/,
+    /\bworkshop\b/,
+    /\bconference\b/,
+    /\btraining\b/,
+    /\bresult\b/
+  ];
 
-  if (days !== null) {
-    if (days < 0) {
-      statusClass = "danger";
-      statusText = "Expired";
-    } else if (days === 0) {
-      statusClass = "warn";
-      statusText = "Deadline today";
-    } else if (days <= 7) {
-      statusClass = "warn";
-      statusText = `${days} day${days === 1 ? "" : "s"} left`;
-    } else {
-      statusClass = "ok";
-      statusText = `${days} day${days === 1 ? "" : "s"} left`;
-    }
+  for (const pattern of excludePatterns) {
+    if (pattern.test(text)) return false;
   }
+
+  const hasTargetRole =
+    /\bassistant professor\b/.test(text) ||
+    /\bassociate professor\b/.test(text);
+
+  return hasTargetRole;
+}
+
+function groupByInstitute(ads) {
+  const groups = new Map();
+
+  for (const ad of ads) {
+    const key = `${ad.instituteType || "IIT/NIT"}|${ad.institute || "Unknown institute"}`;
+
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        instituteType: ad.instituteType || "IIT/NIT",
+        institute: ad.institute || "Unknown institute",
+        roles: new Set(),
+        departments: new Set(),
+        notices: []
+      });
+    }
+
+    const group = groups.get(key);
+    group.roles.add(ad.role || "Not stated");
+    group.departments.add(ad.department || "Not stated");
+    group.notices.push(ad);
+  }
+
+  for (const group of groups.values()) {
+    group.notices = dedupeNotices(group.notices).sort(compareNotices);
+  }
+
+  return [...groups.values()];
+}
+
+function dedupeNotices(notices) {
+  const map = new Map();
+
+  for (const ad of notices) {
+    const urlKey = normalizeUrlForDisplay(ad.url || "");
+    const titleKey = normalizeText(ad.title || "");
+    const key = `${urlKey}|${titleKey}`;
+
+    if (!map.has(key)) {
+      map.set(key, ad);
+      continue;
+    }
+
+    const existing = map.get(key);
+    map.set(key, preferBetterNotice(existing, ad));
+  }
+
+  return [...map.values()];
+}
+
+function preferBetterNotice(a, b) {
+  const aScore = scoreNotice(a);
+  const bScore = scoreNotice(b);
+  return bScore > aScore ? b : a;
+}
+
+function scoreNotice(ad) {
+  let score = 0;
+  if (ad.deadline && ad.deadline !== "Not stated") score += 3;
+  if (ad.adDate && ad.adDate !== "Not stated") score += 2;
+  if ((ad.title || "").length > 20) score += 1;
+  return score;
+}
+
+function renderInstituteCard(group) {
+  const roleSummary = summarizeRoles([...group.roles]);
+  const departmentSummary = summarizeDepartments([...group.departments]);
 
   return `
     <article class="card">
-      <div class="badge">[${escapeHtml(ad.instituteType || "IIT/NIT")}] ${escapeHtml(ad.institute || "Unknown institute")}</div>
-      <h3>${escapeHtml(ad.role || "Not stated")}</h3>
-      <p>${escapeHtml(ad.department || "Not stated")}</p>
-      <p>Ad date ${escapeHtml(ad.adDate || "Not stated")} | Deadline ${escapeHtml(ad.deadline || "Not stated")}</p>
-      <p class="${statusClass}">${escapeHtml(statusText)}</p>
-      <p><a href="${escapeAttribute(ad.url || "#")}" target="_blank" rel="noopener noreferrer">Open advertisement</a></p>
-      ${DEBUG_MODE ? renderDebug(ad) : ""}
+      <div class="badge">[${escapeHtml(group.instituteType)}] ${escapeHtml(group.institute)}</div>
+      <h3>${escapeHtml(roleSummary)}</h3>
+      <p>${escapeHtml(departmentSummary)}</p>
+      <details>
+        <summary>${group.notices.length} opening${group.notices.length === 1 ? "" : "s"}</summary>
+        ${group.notices.map(renderNoticeLine).join("")}
+      </details>
     </article>
   `;
 }
 
-function renderDebug(ad) {
+function renderNoticeLine(ad) {
+  const adDate = ad.adDate || "Not stated";
+  const deadline = ad.deadline || "Not stated";
+
   return `
-    <details class="debug-block">
-      <summary>Debug</summary>
-      <p><strong>Title</strong> ${escapeHtml(ad.title || "Not stated")}</p>
-      <p><strong>ID</strong> ${escapeHtml(ad.id || "Not stated")}</p>
-      <p><strong>URL</strong> <a href="${escapeAttribute(ad.url || "#")}" target="_blank" rel="noopener noreferrer">${escapeHtml(ad.url || "Not stated")}</a></p>
-      <p><strong>Source page</strong> <a href="${escapeAttribute(ad.sourcePage || "#")}" target="_blank" rel="noopener noreferrer">${escapeHtml(ad.sourcePage || "Not stated")}</a></p>
-    </details>
+    <div class="debug-block">
+      <p><strong>${escapeHtml(ad.title || "Untitled opening")}</strong></p>
+      <p>${escapeHtml(ad.role || "Not stated")} | ${escapeHtml(ad.department || "Not stated")}</p>
+      <p>Ad date ${escapeHtml(adDate)} | Deadline ${escapeHtml(deadline)}</p>
+      <p><a href="${escapeAttribute(ad.url || "#")}" target="_blank" rel="noopener noreferrer">Open notice</a></p>
+    </div>
   `;
 }
 
-function daysLeft(deadline) {
-  if (!deadline || deadline === "Not stated") return null;
+function summarizeRoles(roles) {
+  const set = new Set(roles.filter(Boolean));
+  const hasAssistant = set.has("Assistant Professor");
+  const hasAssociate = set.has("Associate Professor");
+  const hasCombined = set.has("Assistant Professor / Associate Professor");
 
-  const d = new Date(deadline);
-  if (Number.isNaN(d.getTime())) return null;
+  if (hasCombined || (hasAssistant && hasAssociate)) {
+    return "Assistant Professor / Associate Professor";
+  }
 
-  const today = new Date();
-  d.setHours(0, 0, 0, 0);
-  today.setHours(0, 0, 0, 0);
+  return [...set][0] || "Not stated";
+}
 
-  return Math.round((d.getTime() - today.getTime()) / 86400000);
+function summarizeDepartments(departments) {
+  const clean = [...new Set(departments.filter((x) => x && x !== "Not stated"))];
+  if (clean.length === 0) return "Not stated";
+  return clean.join(", ");
+}
+
+function compareNotices(a, b) {
+  return normalizeText(a.title || "").localeCompare(normalizeText(b.title || ""));
+}
+
+function normalizeUrlForDisplay(url) {
+  try {
+    const u = new URL(url);
+    u.hash = "";
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
+function normalizeText(text) {
+  return String(text).toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function sortInstituteGroups(groups) {
+  return groups.sort((a, b) => a.institute.localeCompare(b.institute));
 }
 
 function escapeHtml(text) {
