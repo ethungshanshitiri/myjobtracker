@@ -166,6 +166,41 @@ async function parseSourcePage(source) {
   return dedupeAds(ads);
 }
 
+const EXCLUDE_PATTERNS = [
+  /\bshortlisted\b/i,
+  /\bshortlist\b/i,
+  /\binterview schedule\b/i,
+  /\bteaching presentation\b/i,
+  /\bscreening test\b/i,
+  /\bresult of faculty recruitment\b/i,
+  /\bresult\b/i,
+  /\bshort term course\b/i,
+  /\bworkshop\b/i,
+  /\bconference\b/i,
+  /\btraining\b/i
+];
+
+function isLikelyOpening(localContext, title) {
+  const text = `${title} ${localContext}`;
+
+  for (const pattern of EXCLUDE_PATTERNS) {
+    if (pattern.test(text)) return false;
+  }
+
+  const hasRole =
+    /\bassistant professor\b/i.test(text) ||
+    /\bassociate professor\b/i.test(text);
+
+  const hasOpeningSignal =
+    /\brecruitment\b/i.test(text) ||
+    /\badvertisement\b/i.test(text) ||
+    /\bapplications are invited\b/i.test(text) ||
+    /\bfaculty positions\b/i.test(text) ||
+    /\bapply\b/i.test(text);
+
+  return hasRole || hasOpeningSignal;
+}
+
 function extractAnchorsWithContext(html, baseUrl) {
   const anchors = [];
   const regex = /<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
