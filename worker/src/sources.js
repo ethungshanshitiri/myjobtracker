@@ -160,13 +160,5 @@ export const SOURCES = [
     pageUrl: "https://nitkkr.ac.in/recruitment-notification-for-faculty-positions/",
     pageType: "html-links",
     batch: 1
-  },
-  {
-    id: "test",
-    instituteType: "NIT",
-    institute: "NIT test",
-    pageUrl: "https://www.ubjobs.buffalo.edu/postings/59563",
-    pageType: "html-links",
-    batch: 1
   }
 ];
