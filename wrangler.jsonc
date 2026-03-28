@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "myjobtracker",
+  "main": "src/index.js",
+  "compatibility_date": "2026-03-28",
+  "observability": {
+    "enabled": true
+  },
+  "kv_namespaces": [
+    {
+      "binding": "ALERTS_KV",
+      "id": "fd04674ba5264938a01ddbb9bec6c481"
+    }
+  ],
+  "triggers": {
+    "crons": ["* * * * *"]
+  }
+}

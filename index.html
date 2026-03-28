@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>IIT and NIT Faculty Alerts</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <header class="hero">
+        <h1>IIT and NIT Faculty Alerts</h1>
+        <p>
+          A simple dashboard for Assistant Professor and Associate Professor ads in selected departments.
+        </p>
+      </header>
+
+      <section class="toolbar">
+        <label>
+          Search institute or department
+          <input id="searchBox" type="text" placeholder="Type IIT Delhi, CSE, ECE, EE..." />
+        </label>
+        <button id="refreshBtn">Refresh</button>
+      </section>
+
+      <section class="summary" id="summary"></section>
+      <section class="cards" id="cards"></section>
+    </main>
+
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>
