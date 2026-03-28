@@ -44,6 +44,8 @@ async function runScan(env, forceAllBatches = false) {
   const minute = now.getUTCMinutes();
 
   const activeAds = await loadActiveAds(env);
+  const activeMap = new Map(activeAds.map((ad) => [ad.id, ad]));
+
   const batchCount = 3;
   const currentBatch = minute % batchCount;
   const sourcesToCheck = forceAllBatches
@@ -52,7 +54,6 @@ async function runScan(env, forceAllBatches = false) {
 
   const foundNow = [];
   const newAds = [];
-  const existingSeen = new Set(activeAds.map((ad) => ad.id));
 
   for (const source of sourcesToCheck) {
     try {
@@ -63,8 +64,9 @@ async function runScan(env, forceAllBatches = false) {
         const alreadySeen = await env.ALERTS_KV.get(seenKey);
 
         foundNow.push(ad);
+        activeMap.set(ad.id, ad);
 
-        if (!alreadySeen && !existingSeen.has(ad.id)) {
+        if (!alreadySeen) {
           newAds.push(ad);
           await env.ALERTS_KV.put(seenKey, now.toISOString());
         }
@@ -74,13 +76,11 @@ async function runScan(env, forceAllBatches = false) {
     }
   }
 
-  const mergedAds = dedupeAds([...activeAds, ...foundNow]);
-  const sortedAds = sortAds(mergedAds);
-
-  await env.ALERTS_KV.put("activeAds", JSON.stringify(sortedAds));
+  const mergedAds = mergeAds([...activeMap.values()], foundNow);
+  await env.ALERTS_KV.put("activeAds", JSON.stringify(mergedAds));
   await env.ALERTS_KV.put("lastScan", now.toISOString());
 
-  const sortedNewAds = sortAds(dedupeAds(newAds));
+  const sortedNewAds = sortAds(newAds);
   if (sortedNewAds.length > 0) {
     await notifyNewAds(sortedNewAds, env);
   }
@@ -105,6 +105,20 @@ async function loadActiveAds(env) {
   }
 }
 
+function mergeAds(existingAds, freshAds) {
+  const map = new Map();
+
+  for (const ad of existingAds) {
+    map.set(ad.id, ad);
+  }
+
+  for (const ad of freshAds) {
+    map.set(ad.id, ad);
+  }
+
+  return sortAds([...map.values()]);
+}
+
 async function parseSourcePage(source) {
   const response = await fetch(source.pageUrl, {
     headers: {
@@ -118,33 +132,24 @@ async function parseSourcePage(source) {
 
   const html = await response.text();
   const anchors = extractAnchorsWithContext(html, source.pageUrl);
+
   const ads = [];
 
   for (const anchor of anchors) {
-    const localContext = `${anchor.text} ${anchor.contextText} ${anchor.href}`.trim();
-
-    const role = resolveRole(anchor.text, localContext);
-    const department = resolveDepartment(anchor.text, localContext);
+    const localContext = `${anchor.text} ${anchor.contextText} ${anchor.href}`;
+    const role = detectRole(localContext);
+    const department = detectDepartment(localContext);
 
     if (!role || !department) continue;
 
-    const dateHints = detectDates(localContext);
-    const adDate = detectAdDate(localContext) || dateHints.firstDate || "Not stated";
-    const deadline = detectDeadline(localContext) || dateHints.secondDate || "Not stated";
+    const localDateHints = detectDates(localContext);
+    const adDate = detectAdDate(localContext) || localDateHints.firstDate || "Not stated";
+    const deadline = detectDeadline(localContext) || localDateHints.secondDate || "Not stated";
     const title = cleanText(anchor.text) || `${source.institute} recruitment`;
-    const canonicalUrl = canonicalizeUrl(anchor.href);
-    const semanticKey = buildSemanticKey({
-      institute: source.institute,
-      role,
-      department,
-      title,
-      deadline,
-    });
+    const id = makeId(`${source.institute}|${title}|${anchor.href}|${role}|${department}`);
 
     ads.push({
-      id: makeId(`${source.institute}|${canonicalUrl}|${semanticKey}`),
-      dedupeUrlKey: `${source.institute}|${canonicalUrl}`,
-      dedupeSemanticKey: semanticKey,
+      id,
       instituteType: source.instituteType,
       institute: source.institute,
       role,
@@ -175,8 +180,8 @@ function extractAnchorsWithContext(html, baseUrl) {
     if (!text && !href.toLowerCase().endsWith(".pdf")) continue;
     if (/^(mailto:|javascript:|tel:)/i.test(href)) continue;
 
-    const contextStart = Math.max(0, match.index - 500);
-    const contextEnd = Math.min(html.length, regex.lastIndex + 500);
+    const contextStart = Math.max(0, match.index - 600);
+    const contextEnd = Math.min(html.length, regex.lastIndex + 600);
     const contextText = cleanText(stripTags(html.slice(contextStart, contextEnd)));
 
     const joined = `${text} ${href} ${contextText}`.toLowerCase();
@@ -195,51 +200,26 @@ function extractAnchorsWithContext(html, baseUrl) {
   return anchors;
 }
 
-function resolveRole(anchorText, localContext) {
-  const anchorRoles = findRoles(anchorText);
-  if (anchorRoles.length === 1) return anchorRoles[0];
-  if (anchorRoles.length === 2) return "Assistant Professor / Associate Professor";
-
-  const contextRoles = findRoles(localContext);
-  if (contextRoles.length === 1) return contextRoles[0];
-
-  return null;
-}
-
-function findRoles(text) {
-  const out = [];
+function detectRole(text) {
   const t = text.toLowerCase();
+  const hasAssistant = /\bassistant professor\b/.test(t);
+  const hasAssociate = /\bassociate professor\b/.test(t);
 
-  if (/\bassistant professor\b/.test(t)) out.push("Assistant Professor");
-  if (/\bassociate professor\b/.test(t)) out.push("Associate Professor");
-
-  return [...new Set(out)];
-}
-
-function resolveDepartment(anchorText, localContext) {
-  const anchorDepartments = findDepartments(anchorText);
-  if (anchorDepartments.length === 1) return anchorDepartments[0];
-  if (anchorDepartments.length > 1) return null;
-
-  const contextDepartments = findDepartments(localContext);
-  if (contextDepartments.length === 1) return contextDepartments[0];
-
+  if (hasAssistant && hasAssociate) return "Assistant Professor / Associate Professor";
+  if (hasAssistant) return "Assistant Professor";
+  if (hasAssociate) return "Associate Professor";
   return null;
 }
 
-function findDepartments(text) {
-  const hits = [];
-
+function detectDepartment(text) {
   for (const rule of DEPARTMENT_RULES) {
     for (const pattern of rule.patterns) {
       if (pattern.test(text)) {
-        hits.push(rule.label);
-        break;
+        return rule.label;
       }
     }
   }
-
-  return [...new Set(hits)];
+  return null;
 }
 
 function detectDates(text) {
@@ -403,142 +383,25 @@ async function sendEmail(newAds, env) {
   }
 }
 
-{function dedupeAds(ads) {
-  const byUrl = new Map();
-  const bySemantic = new Map();
-  const fallbackById = new Map();
+function dedupeAds(ads) {
+  const map = new Map();
 
   for (const ad of ads) {
-    const urlKey = ad.dedupeUrlKey || "";
-    const semanticKey = ad.dedupeSemanticKey || "";
-    let existing = null;
-
-    if (urlKey && byUrl.has(urlKey)) {
-      existing = byUrl.get(urlKey);
-    } else if (semanticKey && bySemantic.has(semanticKey)) {
-      existing = bySemantic.get(semanticKey);
-    } else if (ad.id && fallbackById.has(ad.id)) {
-      existing = fallbackById.get(ad.id);
-    }
-
-    if (!existing) {
-      const copy = { ...ad };
-
-      if (urlKey) byUrl.set(urlKey, copy);
-      if (semanticKey) bySemantic.set(semanticKey, copy);
-      if (copy.id) fallbackById.set(copy.id, copy);
-
-      continue;
-    }
-
-    const merged = mergeAd(existing, ad);
-
-    if (urlKey) byUrl.set(urlKey, merged);
-    if (semanticKey) bySemantic.set(semanticKey, merged);
-
-    if (existing.dedupeUrlKey) byUrl.set(existing.dedupeUrlKey, merged);
-    if (existing.dedupeSemanticKey) bySemantic.set(existing.dedupeSemanticKey, merged);
-    if (merged.id) fallbackById.set(merged.id, merged);
+    map.set(ad.id, ad);
   }
 
-  const out = new Map();
+  return [...map.values()];
+}
 
-  for (const ad of byUrl.values()) {
-    if (ad.id) out.set(ad.id, ad);
+function makeId(input) {
+  let hash = 2166136261;
+
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
   }
 
-  for (const ad of bySemantic.values()) {
-    if (ad.id) out.set(ad.id, ad);
-  }
-
-  for (const ad of fallbackById.values()) {
-    if (ad.id) out.set(ad.id, ad);
-  }
-
-  return [...out.values()];
-}
-
-function mergeAd(a, b) {
-  const betterTitle = pickBetterString(a.title, b.title);
-  const betterDate = pickBetterDate(a.adDate, b.adDate);
-  const betterDeadline = pickBetterDate(a.deadline, b.deadline);
-  const betterUrl = pickBetterUrl(a.url, b.url);
-
-  return {
-    ...a,
-    ...b,
-    title: betterTitle,
-    adDate: betterDate,
-    deadline: betterDeadline,
-    url: betterUrl,
-    dedupeUrlKey: a.dedupeUrlKey || b.dedupeUrlKey,
-    dedupeSemanticKey: a.dedupeSemanticKey || b.dedupeSemanticKey,
-  };
-}
-
-function pickBetterString(a, b) {
-  const aa = (a || "").trim();
-  const bb = (b || "").trim();
-  if (!aa) return bb;
-  if (!bb) return aa;
-  return bb.length > aa.length ? bb : aa;
-}
-
-function pickBetterDate(a, b) {
-  if (!a || a === "Not stated") return b || "Not stated";
-  if (!b || b === "Not stated") return a;
-  return a;
-}
-
-function pickBetterUrl(a, b) {
-  const aa = a || "";
-  const bb = b || "";
-  if (!aa) return bb;
-  if (!bb) return aa;
-  const aPdf = aa.toLowerCase().endsWith(".pdf");
-  const bPdf = bb.toLowerCase().endsWith(".pdf");
-  if (aPdf && !bPdf) return aa;
-  if (bPdf && !aPdf) return bb;
-  return aa;
-}
-
-function canonicalizeUrl(url) {
-  try {
-    const u = new URL(url);
-    u.hash = "";
-
-    const keep = [];
-    for (const [k, v] of u.searchParams.entries()) {
-      const key = k.toLowerCase();
-      if (key.startsWith("utm_")) continue;
-      if (key === "fbclid") continue;
-      if (key === "gclid") continue;
-      keep.push([k, v]);
-    }
-
-    u.search = "";
-    for (const [k, v] of keep) {
-      u.searchParams.append(k, v);
-    }
-
-    return u.toString();
-  } catch {
-    return url;
-  }
-}
-
-function buildSemanticKey({ institute, role, department, title, deadline }) {
-  const normalizedTitle = normalizeTitleStem(title);
-  const normalizedDeadline = (deadline || "").toLowerCase().trim();
-  return `${institute}|${role}|${department}|${normalizedDeadline}|${normalizedTitle}`;
-}
-
-function normalizeTitleStem(title) {
-  return cleanText(title || "")
-    .toLowerCase()
-    .replace(/\b(advertisement|advt|recruitment|faculty|positions?)\b/g, " ")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
+  return `ad_${(hash >>> 0).toString(16)}`;
 }
 
 function toAbsoluteUrl(href, baseUrl) {
@@ -569,17 +432,6 @@ function escapeHtml(text) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
-}
-
-function makeId(input) {
-  let hash = 2166136261;
-
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
-  }
-
-  return `ad_${(hash >>> 0).toString(16)}`;
 }
 
 function json(data, status = 200) {
