@@ -43,9 +43,6 @@ async function runScan(env, forceAllBatches = false) {
   const now = new Date();
   const minute = now.getUTCMinutes();
 
-  const activeAds = await loadActiveAds(env);
-  const activeMap = new Map(activeAds.map((ad) => [ad.id, ad]));
-
   const batchCount = 3;
   const currentBatch = minute % batchCount;
   const sourcesToCheck = forceAllBatches
@@ -54,21 +51,19 @@ async function runScan(env, forceAllBatches = false) {
 
   const foundNow = [];
   const newAds = [];
+  const previousAds = await loadActiveAds(env);
+  const previousIds = new Set(previousAds.map((ad) => ad.id));
 
   for (const source of sourcesToCheck) {
     try {
       const ads = await parseSourcePage(source);
 
       for (const ad of ads) {
-        const seenKey = `seen:${ad.id}`;
-        const alreadySeen = await env.ALERTS_KV.get(seenKey);
-
         foundNow.push(ad);
-        activeMap.set(ad.id, ad);
 
-        if (!alreadySeen) {
+        if (!previousIds.has(ad.id)) {
           newAds.push(ad);
-          await env.ALERTS_KV.put(seenKey, now.toISOString());
+          await env.ALERTS_KV.put(`seen:${ad.id}`, now.toISOString());
         }
       }
     } catch (error) {
@@ -76,11 +71,12 @@ async function runScan(env, forceAllBatches = false) {
     }
   }
 
-  const mergedAds = mergeAds([...activeMap.values()], foundNow);
-  await env.ALERTS_KV.put("activeAds", JSON.stringify(mergedAds));
+  const freshActiveAds = dedupeAds(foundNow);
+
+  await env.ALERTS_KV.put("activeAds", JSON.stringify(sortAds(freshActiveAds)));
   await env.ALERTS_KV.put("lastScan", now.toISOString());
 
-  const sortedNewAds = sortAds(newAds);
+  const sortedNewAds = sortAds(dedupeAds(newAds));
   if (sortedNewAds.length > 0) {
     await notifyNewAds(sortedNewAds, env);
   }
@@ -88,7 +84,7 @@ async function runScan(env, forceAllBatches = false) {
   return {
     ok: true,
     checkedSources: sourcesToCheck.map((s) => s.id),
-    foundCount: foundNow.length,
+    foundCount: freshActiveAds.length,
     newCount: sortedNewAds.length,
     newAds: sortedNewAds,
   };
@@ -103,20 +99,6 @@ async function loadActiveAds(env) {
   } catch {
     return [];
   }
-}
-
-function mergeAds(existingAds, freshAds) {
-  const map = new Map();
-
-  for (const ad of existingAds) {
-    map.set(ad.id, ad);
-  }
-
-  for (const ad of freshAds) {
-    map.set(ad.id, ad);
-  }
-
-  return sortAds([...map.values()]);
 }
 
 async function parseSourcePage(source) {
@@ -146,7 +128,9 @@ async function parseSourcePage(source) {
     const adDate = detectAdDate(localContext) || localDateHints.firstDate || "Not stated";
     const deadline = detectDeadline(localContext) || localDateHints.secondDate || "Not stated";
     const title = cleanText(anchor.text) || `${source.institute} recruitment`;
+
     if (!isCurrentOpening(`${title} ${localContext}`)) continue;
+
     const id = makeId(`${source.institute}|${title}|${anchor.href}|${role}|${department}`);
 
     ads.push({
@@ -178,29 +162,8 @@ const EXCLUDE_PATTERNS = [
   /\bshort term course\b/i,
   /\bworkshop\b/i,
   /\bconference\b/i,
-  /\btraining\b/i
+  /\btraining\b/i,
 ];
-
-function isLikelyOpening(localContext, title) {
-  const text = `${title} ${localContext}`;
-
-  for (const pattern of EXCLUDE_PATTERNS) {
-    if (pattern.test(text)) return false;
-  }
-
-  const hasRole =
-    /\bassistant professor\b/i.test(text) ||
-    /\bassociate professor\b/i.test(text);
-
-  const hasOpeningSignal =
-    /\brecruitment\b/i.test(text) ||
-    /\badvertisement\b/i.test(text) ||
-    /\bapplications are invited\b/i.test(text) ||
-    /\bfaculty positions\b/i.test(text) ||
-    /\bapply\b/i.test(text);
-
-  return hasRole || hasOpeningSignal;
-}
 
 function extractAnchorsWithContext(html, baseUrl) {
   const anchors = [];
@@ -306,7 +269,7 @@ const CURRENT_OPEN_PATTERNS = [
   /\brolling advertisement\b/i,
   /\bactive now\b/i,
   /\bforms?\s+are\s+active now\b/i,
-  /\bregular drive is opened\b/i
+  /\bregular drive is opened\b/i,
 ];
 
 const CLOSED_OR_POST_AD_PATTERNS = [
@@ -318,11 +281,15 @@ const CLOSED_OR_POST_AD_PATTERNS = [
   /\bscreening test\b/i,
   /\bresult of faculty recruitment\b/i,
   /\bresult\b/i,
-  /\bselection list\b/i
+  /\bselection list\b/i,
 ];
 
 function isCurrentOpening(text) {
   const t = text.toLowerCase();
+
+  for (const pattern of EXCLUDE_PATTERNS) {
+    if (pattern.test(t)) return false;
+  }
 
   for (const pattern of CLOSED_OR_POST_AD_PATTERNS) {
     if (pattern.test(t)) return false;
@@ -464,9 +431,7 @@ async function sendEmail(newAds, env) {
   const html = `
     <h2>${escapeHtml(subject)}</h2>
     <ul>
-      ${newAds
-        .map((ad) => `<li>${escapeHtml(formatAlertLine(ad))}</li>`)
-        .join("")}
+      ${newAds.map((ad) => `<li>${escapeHtml(formatAlertLine(ad))}</li>`).join("")}
     </ul>
   `;
 
