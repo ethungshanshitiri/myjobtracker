@@ -151,19 +151,19 @@ export const SOURCES = [
     batch: 2
   },
   {
-    id: "nitmz-home",
-    instituteType: "NIT",
-    institute: "NIT Mizoram",
-    pageUrl: "https://nitmz.ac.in/",
-    pageType: "html-links",
-    batch: 0
-  },
-  {
-    id: "nitkkr-home",
-    instituteType: "NIT",
-    institute: "NIT Kurukshetra",
-    pageUrl: "https://nitkkr.ac.in/",
-    pageType: "html-links",
-    batch: 1
-  }
+  id: "nitmz-faculty-notices",
+  instituteType: "NIT",
+  institute: "NIT Mizoram",
+  pageUrl: "https://www.nitmz.ac.in/DisplayPage.aspx?page=ga",
+  pageType: "html-links",
+  batch: 0
+},
+{
+  id: "nitkkr-faculty",
+  instituteType: "NIT",
+  institute: "NIT Kurukshetra",
+  pageUrl: "https://nitkkr.ac.in/recruitment-notification-for-faculty-positions/",
+  pageType: "html-links",
+  batch: 1
+}
 ];
