@@ -1,58 +1,3 @@
-export const ROLE_KEYWORDS = [
-  "assistant professor",
-  "associate professor"
-];
-
-export const DEPARTMENT_RULES = [
-  {
-    label: "Electrical Engineering",
-    patterns: [
-      /\belectrical engineering\b/i,
-      /\bdepartment of electrical engineering\b/i
-    ]
-  },
-  {
-    label: "Electronics Engineering",
-    patterns: [
-      /\belectronics engineering\b/i,
-      /\bdepartment of electronics engineering\b/i
-    ]
-  },
-  {
-    label: "Electrical and Electronics Engineering",
-    patterns: [
-      /\belectrical and electronics engineering\b/i,
-      /\bdepartment of electrical and electronics engineering\b/i,
-      /\beee\b/i
-    ]
-  },
-  {
-    label: "Electronics and Communication Engineering",
-    patterns: [
-      /\belectronics and communication engineering\b/i,
-      /\belectronics and communications engineering\b/i,
-      /\bdepartment of electronics and communication engineering\b/i,
-      /\bdepartment of electronics and communications engineering\b/i,
-      /\bece\b/i
-    ]
-  },
-  {
-    label: "Computer Science",
-    patterns: [
-      /\bcomputer science\b/i,
-      /\bdepartment of computer science\b/i
-    ]
-  },
-  {
-    label: "Computer Science and Engineering",
-    patterns: [
-      /\bcomputer science and engineering\b/i,
-      /\bdepartment of computer science and engineering\b/i,
-      /\bcse\b/i
-    ]
-  }
-];
-
 export const SOURCES = [
   {
     id: "iitd-jobs",
@@ -143,27 +88,43 @@ export const SOURCES = [
     batch: 1
   },
   {
-    id: "vnit-recruitment",
+    id: "vnit-professor",
     instituteType: "NIT",
     institute: "VNIT Nagpur",
-    pageUrl: "https://vnit.ac.in/recruitment/",
+    pageUrl: "https://vnit.ac.in/recruitment-of-professor-at-vnit-nagpur/",
     pageType: "html-links",
     batch: 2
   },
   {
-  id: "nitmz-faculty-notices",
-  instituteType: "NIT",
-  institute: "NIT Mizoram",
-  pageUrl: "https://www.nitmz.ac.in/DisplayPage.aspx?page=ga",
-  pageType: "html-links",
-  batch: 0
-},
-{
-  id: "nitkkr-faculty",
-  instituteType: "NIT",
-  institute: "NIT Kurukshetra",
-  pageUrl: "https://nitkkr.ac.in/recruitment-notification-for-faculty-positions/",
-  pageType: "html-links",
-  batch: 1
-}
+    id: "vnit-associate-professor",
+    instituteType: "NIT",
+    institute: "VNIT Nagpur",
+    pageUrl: "https://vnit.ac.in/recruitment-of-associate-professor-at-vnit-nagpur/",
+    pageType: "html-links",
+    batch: 2
+  },
+  {
+    id: "vnit-assistant-professor",
+    instituteType: "NIT",
+    institute: "VNIT Nagpur",
+    pageUrl: "https://vnit.ac.in/recruitment-of-assistant-professor/",
+    pageType: "html-links",
+    batch: 2
+  },
+  {
+    id: "nitmz-faculty-notices",
+    instituteType: "NIT",
+    institute: "NIT Mizoram",
+    pageUrl: "https://nitmz.ac.in/DisplayPage.aspx?page=ga",
+    pageType: "html-links",
+    batch: 0
+  },
+  {
+    id: "nitkkr-faculty",
+    instituteType: "NIT",
+    institute: "NIT Kurukshetra",
+    pageUrl: "https://nitkkr.ac.in/recruitment-notification-for-faculty-positions/",
+    pageType: "html-links",
+    batch: 1
+  }
 ];
