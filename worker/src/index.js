@@ -146,7 +146,7 @@ async function parseSourcePage(source) {
     const adDate = detectAdDate(localContext) || localDateHints.firstDate || "Not stated";
     const deadline = detectDeadline(localContext) || localDateHints.secondDate || "Not stated";
     const title = cleanText(anchor.text) || `${source.institute} recruitment`;
-    if (!isLikelyOpening(localContext, title)) continue;
+    if (!isCurrentOpening(`${title} ${localContext}`)) continue;
     const id = makeId(`${source.institute}|${title}|${anchor.href}|${role}|${department}`);
 
     ads.push({
@@ -296,6 +296,77 @@ function detectDeadline(text) {
   }
 
   return null;
+}
+
+const CURRENT_OPEN_PATTERNS = [
+  /\bapplications?\s+are\s+invited\b/i,
+  /\bapply\s+now\b/i,
+  /\bapplications?\s+opened\b/i,
+  /\bopen\s+now\b/i,
+  /\brolling advertisement\b/i,
+  /\bactive now\b/i,
+  /\bforms?\s+are\s+active now\b/i,
+  /\bregular drive is opened\b/i
+];
+
+const CLOSED_OR_POST_AD_PATTERNS = [
+  /\bclosed\b/i,
+  /\bshortlisted\b/i,
+  /\bshortlist\b/i,
+  /\binterview schedule\b/i,
+  /\bteaching presentation\b/i,
+  /\bscreening test\b/i,
+  /\bresult of faculty recruitment\b/i,
+  /\bresult\b/i,
+  /\bselection list\b/i
+];
+
+function isCurrentOpening(text) {
+  const t = text.toLowerCase();
+
+  for (const pattern of CLOSED_OR_POST_AD_PATTERNS) {
+    if (pattern.test(t)) return false;
+  }
+
+  for (const pattern of CURRENT_OPEN_PATTERNS) {
+    if (pattern.test(t)) return true;
+  }
+
+  return hasFutureDate(text);
+}
+
+function hasFutureDate(text) {
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+
+  for (const match of text.matchAll(/\b(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\b/g)) {
+    const d = parseDateForComparison(match[1]);
+    if (d && d >= now) return true;
+  }
+
+  return false;
+}
+
+function parseDateForComparison(raw) {
+  if (!raw) return null;
+
+  const trimmed = raw.trim();
+
+  if (/^\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}$/.test(trimmed)) {
+    const d = new Date(trimmed);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  const cleaned = trimmed.replace(/\./g, "/").replace(/-/g, "/");
+  const parts = cleaned.split("/");
+
+  if (parts.length !== 3) return null;
+
+  let [dd, mm, yyyy] = parts;
+  if (yyyy.length === 2) yyyy = `20${yyyy}`;
+
+  const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 function normalizeDate(raw) {
