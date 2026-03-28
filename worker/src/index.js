@@ -163,6 +163,13 @@ const EXCLUDE_PATTERNS = [
   /\bworkshop\b/i,
   /\bconference\b/i,
   /\btraining\b/i,
+  /\bselected candidates?\b/i,
+  /\badmissions?\b/i,
+  /\bph\.?d\b/i,
+  /\bvisvesvaraya\b/i,
+  /\bviva-voce\b/i,
+  /\bsynopsis seminar\b/i,
+  /\bopen synopsis\b/i
 ];
 
 function extractAnchorsWithContext(html, baseUrl) {
