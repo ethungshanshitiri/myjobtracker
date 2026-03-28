@@ -297,7 +297,7 @@ export const SOURCES = [
     id: "nitap-andhra-faculty",
     instituteType: "NIT",
     institute: "NIT Andhra Pradesh",
-    pageUrl: "https://nitandhra.ac.in/main/all_announce.php",
+    pageUrl: "https://nitandhra.ac.in/main/careers.php",
     pageType: "html-links",
     batch: 0
   },
