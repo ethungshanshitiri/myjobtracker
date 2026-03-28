@@ -64,7 +64,7 @@ function render() {
   allAds.length === DEV_DUMMY_ADS.length &&
   allAds.every((ad) => ad.id.startsWith("dummy-"));
 
-  summaryEl.textContent = `${groups.length} institution${groups.length === 1 ? "" : "s"} shown` + (usingDummy ? " (test card)" : "");
+  summaryEl.textContent = `${groups.length} institution${groups.length === 1 ? "" : "s"} shown` + (usingDummy ? " (DUMMY CARD)" : "");
 
   if (groups.length === 0) {
     cardsEl.innerHTML = `<div class="empty">No current openings.</div>`;
