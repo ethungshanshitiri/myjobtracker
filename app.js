@@ -33,54 +33,22 @@ async function loadAds() {
 function render() {
   const query = searchBox.value.trim().toLowerCase();
 
-  const filteredAds = allAds
-    .filter(isRelevantOpening)
-    .filter((ad) => {
-      const haystack =
-        `${ad.institute || ""} ${ad.department || ""} ${ad.role || ""} ${ad.title || ""}`.toLowerCase();
-      return haystack.includes(query);
-    });
+  const filteredAds = allAds.filter((ad) => {
+    const haystack =
+      `${ad.institute || ""} ${ad.department || ""} ${ad.role || ""} ${ad.title || ""}`.toLowerCase();
+    return haystack.includes(query);
+  });
 
   const groups = sortInstituteGroups(groupByInstitute(filteredAds));
 
   summaryEl.textContent = `${groups.length} institution${groups.length === 1 ? "" : "s"} shown`;
 
   if (groups.length === 0) {
-    cardsEl.innerHTML = `<div class="empty">No matching openings.</div>`;
+    cardsEl.innerHTML = `<div class="empty">No current openings.</div>`;
     return;
   }
 
   cardsEl.innerHTML = groups.map(renderInstituteCard).join("");
-}
-
-function isRelevantOpening(ad) {
-  const text = `${ad.title || ""} ${ad.role || ""} ${ad.department || ""}`.toLowerCase();
-
-  const excludePatterns = [
-    /\bshortlisted\b/,
-    /\bshortlist\b/,
-    /\binterview schedule\b/,
-    /\bteaching presentation\b/,
-    /\bscreening test\b/,
-    /\bsyllabus\b/,
-    /\bconstitution\b/,
-    /\bjrf\b/,
-    /\bshort term course\b/,
-    /\bworkshop\b/,
-    /\bconference\b/,
-    /\btraining\b/,
-    /\bresult\b/
-  ];
-
-  for (const pattern of excludePatterns) {
-    if (pattern.test(text)) return false;
-  }
-
-  const hasTargetRole =
-    /\bassistant professor\b/.test(text) ||
-    /\bassociate professor\b/.test(text);
-
-  return hasTargetRole;
 }
 
 function groupByInstitute(ads) {
@@ -96,47 +64,22 @@ function groupByInstitute(ads) {
         institute: ad.institute || "Unknown institute",
         roles: new Set(),
         departments: new Set(),
-        notices: []
+        bestNotice: null,
       });
     }
 
     const group = groups.get(key);
     group.roles.add(ad.role || "Not stated");
     group.departments.add(ad.department || "Not stated");
-    group.notices.push(ad);
-  }
-
-  for (const group of groups.values()) {
-    group.notices = dedupeNotices(group.notices).sort(compareNotices);
+    group.bestNotice = pickBestNotice(group.bestNotice, ad);
   }
 
   return [...groups.values()];
 }
 
-function dedupeNotices(notices) {
-  const map = new Map();
-
-  for (const ad of notices) {
-    const urlKey = normalizeUrlForDisplay(ad.url || "");
-    const titleKey = normalizeText(ad.title || "");
-    const key = `${urlKey}|${titleKey}`;
-
-    if (!map.has(key)) {
-      map.set(key, ad);
-      continue;
-    }
-
-    const existing = map.get(key);
-    map.set(key, preferBetterNotice(existing, ad));
-  }
-
-  return [...map.values()];
-}
-
-function preferBetterNotice(a, b) {
-  const aScore = scoreNotice(a);
-  const bScore = scoreNotice(b);
-  return bScore > aScore ? b : a;
+function pickBestNotice(current, candidate) {
+  if (!current) return candidate;
+  return scoreNotice(candidate) > scoreNotice(current) ? candidate : current;
 }
 
 function scoreNotice(ad) {
@@ -150,31 +93,16 @@ function scoreNotice(ad) {
 function renderInstituteCard(group) {
   const roleSummary = summarizeRoles([...group.roles]);
   const departmentSummary = summarizeDepartments([...group.departments]);
+  const deadline = group.bestNotice?.deadline || "Not stated";
+  const link = group.bestNotice?.url || "#";
 
   return `
     <article class="card">
-      <div class="badge">[${escapeHtml(group.instituteType)}] ${escapeHtml(group.institute)}</div>
+      <div class="badge">[${escapeHtml(group.instituteType)}] ${escapeHtml(group.institute)} | Deadline ${escapeHtml(deadline)}</div>
       <h3>${escapeHtml(roleSummary)}</h3>
       <p>${escapeHtml(departmentSummary)}</p>
-      <details>
-        <summary>${group.notices.length} opening${group.notices.length === 1 ? "" : "s"}</summary>
-        ${group.notices.map(renderNoticeLine).join("")}
-      </details>
+      <p><a href="${escapeAttribute(link)}" target="_blank" rel="noopener noreferrer">Open advertisement</a></p>
     </article>
-  `;
-}
-
-function renderNoticeLine(ad) {
-  const adDate = ad.adDate || "Not stated";
-  const deadline = ad.deadline || "Not stated";
-
-  return `
-    <div class="debug-block">
-      <p><strong>${escapeHtml(ad.title || "Untitled opening")}</strong></p>
-      <p>${escapeHtml(ad.role || "Not stated")} | ${escapeHtml(ad.department || "Not stated")}</p>
-      <p>Ad date ${escapeHtml(adDate)} | Deadline ${escapeHtml(deadline)}</p>
-      <p><a href="${escapeAttribute(ad.url || "#")}" target="_blank" rel="noopener noreferrer">Open notice</a></p>
-    </div>
   `;
 }
 
@@ -195,24 +123,6 @@ function summarizeDepartments(departments) {
   const clean = [...new Set(departments.filter((x) => x && x !== "Not stated"))];
   if (clean.length === 0) return "Not stated";
   return clean.join(", ");
-}
-
-function compareNotices(a, b) {
-  return normalizeText(a.title || "").localeCompare(normalizeText(b.title || ""));
-}
-
-function normalizeUrlForDisplay(url) {
-  try {
-    const u = new URL(url);
-    u.hash = "";
-    return u.toString();
-  } catch {
-    return url;
-  }
-}
-
-function normalizeText(text) {
-  return String(text).toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function sortInstituteGroups(groups) {
