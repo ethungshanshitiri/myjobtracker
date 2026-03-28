@@ -146,6 +146,7 @@ async function parseSourcePage(source) {
     const adDate = detectAdDate(localContext) || localDateHints.firstDate || "Not stated";
     const deadline = detectDeadline(localContext) || localDateHints.secondDate || "Not stated";
     const title = cleanText(anchor.text) || `${source.institute} recruitment`;
+    if (!isLikelyOpening(localContext, title)) continue;
     const id = makeId(`${source.institute}|${title}|${anchor.href}|${role}|${department}`);
 
     ads.push({
