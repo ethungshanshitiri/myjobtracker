@@ -403,38 +403,59 @@ async function sendEmail(newAds, env) {
   }
 }
 
-function dedupeAds(ads) {
+{function dedupeAds(ads) {
   const byUrl = new Map();
   const bySemantic = new Map();
+  const fallbackById = new Map();
 
   for (const ad of ads) {
     const urlKey = ad.dedupeUrlKey || "";
     const semanticKey = ad.dedupeSemanticKey || "";
-
     let existing = null;
 
     if (urlKey && byUrl.has(urlKey)) {
       existing = byUrl.get(urlKey);
     } else if (semanticKey && bySemantic.has(semanticKey)) {
       existing = bySemantic.get(semanticKey);
+    } else if (ad.id && fallbackById.has(ad.id)) {
+      existing = fallbackById.get(ad.id);
     }
 
     if (!existing) {
       const copy = { ...ad };
+
       if (urlKey) byUrl.set(urlKey, copy);
       if (semanticKey) bySemantic.set(semanticKey, copy);
+      if (copy.id) fallbackById.set(copy.id, copy);
+
       continue;
     }
 
     const merged = mergeAd(existing, ad);
+
     if (urlKey) byUrl.set(urlKey, merged);
     if (semanticKey) bySemantic.set(semanticKey, merged);
 
     if (existing.dedupeUrlKey) byUrl.set(existing.dedupeUrlKey, merged);
     if (existing.dedupeSemanticKey) bySemantic.set(existing.dedupeSemanticKey, merged);
+    if (merged.id) fallbackById.set(merged.id, merged);
   }
 
-  return [...new Set(byUrl.values().concat(bySemantic.values()))];
+  const out = new Map();
+
+  for (const ad of byUrl.values()) {
+    if (ad.id) out.set(ad.id, ad);
+  }
+
+  for (const ad of bySemantic.values()) {
+    if (ad.id) out.set(ad.id, ad);
+  }
+
+  for (const ad of fallbackById.values()) {
+    if (ad.id) out.set(ad.id, ad);
+  }
+
+  return [...out.values()];
 }
 
 function mergeAd(a, b) {
