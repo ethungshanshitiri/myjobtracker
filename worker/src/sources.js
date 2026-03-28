@@ -160,5 +160,13 @@ export const SOURCES = [
     pageUrl: "https://nitkkr.ac.in/recruitment-notification-for-faculty-positions/",
     pageType: "html-links",
     batch: 1
+  },
+  {
+    id: "test",
+    instituteType: "NIT",
+    institute: "NIT test",
+    pageUrl: "https://academicpositions.com/ad/serra-hunter-programme-shp/2026/opening-of-academic-positions-tenure-eligible-lecturers-and-associate-professors/245771",
+    pageType: "html-links",
+    batch: 1
   }
 ];
