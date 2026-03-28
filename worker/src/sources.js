@@ -64,13 +64,13 @@ export const SOURCES = [
     batch: 1
   },
   {
-    id: "nitrkl-faculty",
-    instituteType: "NIT",
-    institute: "NIT Rourkela",
-    pageUrl: "https://www.nitrkl.ac.in/Career/Faculty/",
-    pageType: "html-links",
-    batch: 2
-  },
+  id: "nitkkr-faculty",
+  instituteType: "NIT",
+  institute: "NIT Kurukshetra",
+  pageUrl: "https://nitkkr.ac.in/recruitment-notification-for-faculty-positions/",
+  pageType: "html-links",
+  batch: 1
+},
   {
     id: "nitw-faculty",
     instituteType: "NIT",
@@ -88,37 +88,21 @@ export const SOURCES = [
     batch: 1
   },
   {
-    id: "vnit-professor",
-    instituteType: "NIT",
-    institute: "VNIT Nagpur",
-    pageUrl: "https://vnit.ac.in/recruitment-of-professor-at-vnit-nagpur/",
-    pageType: "html-links",
-    batch: 2
-  },
+  id: "vnit-current-openings",
+  instituteType: "NIT",
+  institute: "VNIT Nagpur",
+  pageUrl: "https://vnit.ac.in/position-open/",
+  pageType: "html-links",
+  batch: 2
+},
   {
-    id: "vnit-associate-professor",
-    instituteType: "NIT",
-    institute: "VNIT Nagpur",
-    pageUrl: "https://vnit.ac.in/recruitment-of-associate-professor-at-vnit-nagpur/",
-    pageType: "html-links",
-    batch: 2
-  },
-  {
-    id: "vnit-assistant-professor",
-    instituteType: "NIT",
-    institute: "VNIT Nagpur",
-    pageUrl: "https://vnit.ac.in/recruitment-of-assistant-professor/",
-    pageType: "html-links",
-    batch: 2
-  },
-  {
-    id: "nitmz-faculty-notices",
-    instituteType: "NIT",
-    institute: "NIT Mizoram",
-    pageUrl: "https://nitmz.ac.in/DisplayPage.aspx?page=ga",
-    pageType: "html-links",
-    batch: 0
-  },
+  id: "nitmz-recruitment-feed",
+  instituteType: "NIT",
+  institute: "NIT Mizoram",
+  pageUrl: "https://nitmz.ac.in/",
+  pageType: "html-links",
+  batch: 0
+},
   {
     id: "nitkkr-faculty",
     instituteType: "NIT",
