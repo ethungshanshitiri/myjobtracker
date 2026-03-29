@@ -2,5 +2,8 @@
   "name": "myjobtracker-worker",
   "version": "1.0.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "pdfjs-serverless": "^1.0.0"
+  }
 }
