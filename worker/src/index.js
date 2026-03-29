@@ -9,6 +9,7 @@ const CORS_HEADERS = {
 
 const MAX_PDFS_PER_SOURCE = 3;
 const MAX_PDF_PAGES = 5;
+const MAX_CHILD_PAGES_PER_SOURCE = 3;
 
 export default {
   async fetch(request, env) {
@@ -122,57 +123,43 @@ async function parseSourcePage(source) {
   }
 
   const html = await response.text();
-  const anchors = extractAnchorsWithContext(html, source.pageUrl);
+  const rootAnchors = extractAnchorsWithContext(html, source.pageUrl);
 
-  const ads = [];
-  let pdfsParsed = 0;
+  const allCandidateAds = [];
+  const visitedChildUrls = new Set();
+  let childPagesFetched = 0;
 
-  for (const anchor of anchors) {
-    let pdfText = "";
+  const rootAds = await parseAdsFromAnchors(rootAnchors, source);
+  allCandidateAds.push(...rootAds);
 
-    if (pdfsParsed < MAX_PDFS_PER_SOURCE && looksLikeRelevantPdf(anchor)) {
-      try {
-        pdfText = await extractPdfTextFromUrl(anchor.href, MAX_PDF_PAGES);
-        pdfsParsed += 1;
-      } catch (error) {
-        console.error(`PDF parse failed for ${anchor.href}`, error);
-      }
+  for (const anchor of rootAnchors) {
+    if (childPagesFetched >= MAX_CHILD_PAGES_PER_SOURCE) break;
+    if (!isCrawlableChildPage(anchor, source.pageUrl)) continue;
+    if (visitedChildUrls.has(anchor.href)) continue;
+
+    visitedChildUrls.add(anchor.href);
+
+    try {
+      const childResponse = await fetch(anchor.href, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 IIT-NIT-Faculty-Alert-Starter",
+        },
+      });
+
+      if (!childResponse.ok) continue;
+
+      const childHtml = await childResponse.text();
+      const childAnchors = extractAnchorsWithContext(childHtml, anchor.href);
+      const childAds = await parseAdsFromAnchors(childAnchors, source);
+
+      allCandidateAds.push(...childAds);
+      childPagesFetched += 1;
+    } catch (error) {
+      console.error(`Child page parse failed for ${anchor.href}`, error);
     }
-
-    const localContext = pdfText
-      ? `${anchor.text} ${anchor.href} ${pdfText}`
-      : `${anchor.text} ${anchor.contextText} ${anchor.href}`;
-
-    const role = detectRole(localContext);
-    const department = detectDepartment(localContext);
-
-    if (!role || !department) continue;
-
-    const localDateHints = detectDates(localContext);
-    const adDate = detectAdDate(localContext) || localDateHints.firstDate || "Not stated";
-    const deadline = detectDeadline(localContext) || localDateHints.secondDate || "Not stated";
-    const title = cleanText(anchor.text) || `${source.institute} recruitment`;
-
-    if (!isCurrentOpening(`${title} ${localContext}`)) continue;
-
-    const id = makeId(`${source.institute}|${title}|${anchor.href}|${role}|${department}`);
-
-    ads.push({
-      id,
-      instituteType: source.instituteType,
-      institute: source.institute,
-      role,
-      department,
-      adDate,
-      deadline,
-      url: anchor.href,
-      title,
-      sourcePage: source.pageUrl,
-      firstSeen: new Date().toISOString(),
-    });
   }
 
-  return dedupeAds(ads);
+  return dedupeAds(allCandidateAds);
 }
 
 function extractAnchorsWithContext(html, baseUrl) {
@@ -269,6 +256,100 @@ async function extractPdfTextFromUrl(pdfUrl, maxPages = 5) {
   }
 
   return cleanText(pageTexts.join(" "));
+}
+
+async function parseAdsFromAnchors(anchors, source) {
+  const ads = [];
+  let pdfsParsed = 0;
+
+  for (const anchor of anchors) {
+    let pdfText = "";
+
+    if (pdfsParsed < MAX_PDFS_PER_SOURCE && looksLikeRelevantPdf(anchor)) {
+      try {
+        pdfText = await extractPdfTextFromUrl(anchor.href, MAX_PDF_PAGES);
+        pdfsParsed += 1;
+      } catch (error) {
+        console.error(`PDF parse failed for ${anchor.href}`, error);
+      }
+    }
+
+    const localContext = pdfText
+      ? `${anchor.text} ${anchor.href} ${pdfText}`
+      : `${anchor.text} ${anchor.contextText} ${anchor.href}`;
+
+    const role = detectRole(localContext);
+    const department = detectDepartment(localContext);
+
+    if (!role || !department) continue;
+
+    const localDateHints = detectDates(localContext);
+    const adDate = detectAdDate(localContext) || localDateHints.firstDate || "Not stated";
+    const deadline = detectDeadline(localContext) || localDateHints.secondDate || "Not stated";
+    const title = cleanText(anchor.text) || `${source.institute} recruitment`;
+
+    if (!isCurrentOpening(`${title} ${localContext}`)) continue;
+
+    const id = makeId(`${source.institute}|${title}|${anchor.href}|${role}|${department}`);
+
+    ads.push({
+      id,
+      instituteType: source.instituteType,
+      institute: source.institute,
+      role,
+      department,
+      adDate,
+      deadline,
+      url: anchor.href,
+      title,
+      sourcePage: source.pageUrl,
+      firstSeen: new Date().toISOString(),
+    });
+  }
+
+  return ads;
+}
+
+function isCrawlableChildPage(anchor, sourcePageUrl) {
+  const href = (anchor.href || "").toLowerCase();
+
+  if (!href) return false;
+  if (href.endsWith(".pdf")) return false;
+  if (href.endsWith(".jpg") || href.endsWith(".jpeg") || href.endsWith(".png") || href.endsWith(".gif")) return false;
+  if (href.endsWith(".doc") || href.endsWith(".docx") || href.endsWith(".xls") || href.endsWith(".xlsx")) return false;
+  if (href.endsWith(".ppt") || href.endsWith(".pptx") || href.endsWith(".zip")) return false;
+
+  let sameHost = false;
+  try {
+    sameHost = new URL(anchor.href).host === new URL(sourcePageUrl).host;
+  } catch {
+    sameHost = false;
+  }
+
+  if (!sameHost) return false;
+
+  const joined = `${anchor.text} ${anchor.href}`.toLowerCase();
+
+  const likelyFacultyChildPage =
+    joined.includes("faculty recruitment") ||
+    joined.includes("faculty positions") ||
+    joined.includes("recruitment notification for faculty positions") ||
+    joined.includes("faculty-rolling-advertisement") ||
+    joined.includes("advertisement-for-faculty-positions");
+
+  const obviousNonFacultyPage =
+    joined.includes("jrf") ||
+    joined.includes("project associate") ||
+    joined.includes("project assistant") ||
+    joined.includes("walk in interview") ||
+    joined.includes("group a") ||
+    joined.includes("group b") ||
+    joined.includes("group c") ||
+    joined.includes("non teaching") ||
+    joined.includes("temporary") ||
+    joined.includes("consultant");
+
+  return likelyFacultyChildPage && !obviousNonFacultyPage;
 }
 
 const EXCLUDE_PATTERNS = [
