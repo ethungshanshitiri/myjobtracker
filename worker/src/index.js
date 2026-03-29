@@ -14,7 +14,7 @@ const MAX_PDF_PAGES = 6;
 const MAX_ANCHORS_PER_PAGE = 120;
 const MAX_EVIDENCE_ITEMS_PER_SOURCE = 80;
 const ACTIVE_WITHOUT_DEADLINE_DAYS = 21;
-const BATCH_COUNT = 3;
+const BATCH_COUNT = 12;
 
 const ROLE_RULES = [
   {
@@ -119,7 +119,7 @@ export default {
 async function runScan(env, forceAllBatches = false) {
   const now = new Date();
   const nowIso = now.toISOString();
-  const currentBatch = now.getUTCMinutes() % BATCH_COUNT;
+  const currentBatch = Math.floor(now.getTime() / (30 * 60 * 1000)) % BATCH_COUNT;
 
   const sourcesToCheck = forceAllBatches
     ? SOURCES
