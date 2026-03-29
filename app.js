@@ -18,8 +18,8 @@ const DEV_DUMMY_ADS = [
     adDate: "28 Mar 2026",
     deadline: "30 Apr 2026",
     url: "https://www.iitk.ac.in/faculty-recruitment",
-    title: "Dummy current opening for card preview"
-  }
+    title: "Dummy current opening for card preview",
+  },
 ];
 
 refreshBtn.addEventListener("click", loadAds);
@@ -38,13 +38,19 @@ async function loadAds() {
 
     const ads = await response.json();
     const liveAds = Array.isArray(ads) ? ads : [];
-    allAds = liveAds.length === 0 && DEV_SHOW_DUMMY_WHEN_EMPTY
-      ? DEV_DUMMY_ADS
-      : liveAds;
+
+    allAds =
+      liveAds.length === 0 && DEV_SHOW_DUMMY_WHEN_EMPTY
+        ? DEV_DUMMY_ADS
+        : liveAds;
+
     render();
   } catch (error) {
     summaryEl.textContent = "Could not load ads.";
-    cardsEl.innerHTML = `<div class="empty">Check your Worker URL in app.js.<br><br>${escapeHtml(error.message)}</div>`;
+    cardsEl.innerHTML = `
+      <p>Check your Worker URL in app.js.</p>
+      <pre>${escapeHtml(error.message)}</pre>
+    `;
   }
 }
 
@@ -60,14 +66,16 @@ function render() {
   const groups = sortInstituteGroups(groupByInstitute(filteredAds));
 
   const usingDummy =
-  DEV_SHOW_DUMMY_WHEN_EMPTY &&
-  allAds.length === DEV_DUMMY_ADS.length &&
-  allAds.every((ad) => ad.id.startsWith("dummy-"));
+    DEV_SHOW_DUMMY_WHEN_EMPTY &&
+    allAds.length === DEV_DUMMY_ADS.length &&
+    allAds.every((ad) => ad.id.startsWith("dummy-"));
 
-  summaryEl.textContent = `${groups.length} institution${groups.length === 1 ? "" : "s"} shown` + (usingDummy ? " (DUMMY CARD)" : "");
+  summaryEl.textContent =
+    `${groups.length} institution${groups.length === 1 ? "" : "s"} shown` +
+    (usingDummy ? " (DUMMY CARD)" : "");
 
   if (groups.length === 0) {
-    cardsEl.innerHTML = `<div class="empty">No current openings.</div>`;
+    cardsEl.innerHTML = `<p>No current openings.</p>`;
     return;
   }
 
@@ -87,14 +95,21 @@ function groupByInstitute(ads) {
         institute: ad.institute || "Unknown institute",
         roles: new Set(),
         departments: new Set(),
+        notices: [],
         bestNotice: null,
+        bestDeadlineDate: null,
       });
     }
 
     const group = groups.get(key);
     group.roles.add(ad.role || "Not stated");
     group.departments.add(ad.department || "Not stated");
+    group.notices.push(ad);
     group.bestNotice = pickBestNotice(group.bestNotice, ad);
+  }
+
+  for (const group of groups.values()) {
+    group.bestDeadlineDate = parseDisplayDate(group.bestNotice?.deadline);
   }
 
   return [...groups.values()];
@@ -102,6 +117,32 @@ function groupByInstitute(ads) {
 
 function pickBestNotice(current, candidate) {
   if (!current) return candidate;
+
+  const currentDeadline = parseDisplayDate(current.deadline);
+  const candidateDeadline = parseDisplayDate(candidate.deadline);
+
+  const now = startOfToday();
+
+  const currentIsUpcoming = currentDeadline && currentDeadline >= now;
+  const candidateIsUpcoming = candidateDeadline && candidateDeadline >= now;
+
+  if (candidateIsUpcoming && !currentIsUpcoming) return candidate;
+  if (currentIsUpcoming && !candidateIsUpcoming) return current;
+
+  if (candidateIsUpcoming && currentIsUpcoming) {
+    return candidateDeadline < currentDeadline ? candidate : current;
+  }
+
+  const currentHasDeadline = !!currentDeadline;
+  const candidateHasDeadline = !!candidateDeadline;
+
+  if (candidateHasDeadline && !currentHasDeadline) return candidate;
+  if (currentHasDeadline && !candidateHasDeadline) return current;
+
+  if (candidateHasDeadline && currentHasDeadline) {
+    return candidateDeadline < currentDeadline ? candidate : current;
+  }
+
   return scoreNotice(candidate) > scoreNotice(current) ? candidate : current;
 }
 
@@ -121,8 +162,12 @@ function renderInstituteCard(group) {
 
   return `
     <article class="card">
-      <div class="badge">[${escapeHtml(group.instituteType)}] ${escapeHtml(group.institute)} | Deadline ${escapeHtml(deadline)}</div>
-      <h3>${escapeHtml(roleSummary)}</h3>
+      <div class="card-top">
+        <div class="badge">[${escapeHtml(group.instituteType)}]</div>
+        <div class="deadline">Deadline ${escapeHtml(deadline)}</div>
+      </div>
+      <h3>${escapeHtml(group.institute)}</h3>
+      <p><strong>${escapeHtml(roleSummary)}</strong></p>
       <p>${escapeHtml(departmentSummary)}</p>
       <p><a href="${escapeAttribute(link)}" target="_blank" rel="noopener noreferrer">Open advertisement</a></p>
     </article>
@@ -149,7 +194,57 @@ function summarizeDepartments(departments) {
 }
 
 function sortInstituteGroups(groups) {
-  return groups.sort((a, b) => a.institute.localeCompare(b.institute));
+  return groups.sort((a, b) => {
+    const ad = a.bestDeadlineDate;
+    const bd = b.bestDeadlineDate;
+
+    if (ad && bd) {
+      const diff = ad - bd;
+      if (diff !== 0) return diff;
+      return a.institute.localeCompare(b.institute);
+    }
+
+    if (ad && !bd) return -1;
+    if (!ad && bd) return 1;
+
+    return a.institute.localeCompare(b.institute);
+  });
+}
+
+function parseDisplayDate(value) {
+  if (!value || value === "Not stated") return null;
+
+  const raw = String(value).trim();
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const d = new Date(`${raw}T00:00:00`);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  if (/^\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}$/.test(raw)) {
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? null : startOfDay(d);
+  }
+
+  if (/^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}$/.test(raw)) {
+    const normalized = raw.replace(/[.-]/g, "/");
+    let [dd, mm, yyyy] = normalized.split("/");
+    if (yyyy.length === 2) yyyy = `20${yyyy}`;
+    const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  return null;
+}
+
+function startOfToday() {
+  return startOfDay(new Date());
+}
+
+function startOfDay(date) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
 }
 
 function escapeHtml(text) {
