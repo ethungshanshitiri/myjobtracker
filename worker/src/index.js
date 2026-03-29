@@ -1,10 +1,14 @@
 import { DEPARTMENT_RULES, SOURCES } from "./sources.js";
+import { resolvePDFJS } from "pdfjs-serverless";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
 };
+
+const MAX_PDFS_PER_SOURCE = 3;
+const MAX_PDF_PAGES = 5;
 
 export default {
   async fetch(request, env) {
@@ -71,9 +75,14 @@ async function runScan(env, forceAllBatches = false) {
     }
   }
 
-  const freshActiveAds = dedupeAds(foundNow);
+  const mergedMap = new Map(previousAds.map((ad) => [ad.id, ad]));
+  for (const ad of foundNow) {
+    mergedMap.set(ad.id, ad);
+  }
 
-  await env.ALERTS_KV.put("activeAds", JSON.stringify(sortAds(freshActiveAds)));
+  const freshActiveAds = sortAds([...mergedMap.values()]);
+
+  await env.ALERTS_KV.put("activeAds", JSON.stringify(freshActiveAds));
   await env.ALERTS_KV.put("lastScan", now.toISOString());
 
   const sortedNewAds = sortAds(dedupeAds(newAds));
@@ -116,9 +125,24 @@ async function parseSourcePage(source) {
   const anchors = extractAnchorsWithContext(html, source.pageUrl);
 
   const ads = [];
+  let pdfsParsed = 0;
 
   for (const anchor of anchors) {
-    const localContext = `${anchor.text} ${anchor.contextText} ${anchor.href}`;
+    let pdfText = "";
+
+    if (pdfsParsed < MAX_PDFS_PER_SOURCE && looksLikeRelevantPdf(anchor)) {
+      try {
+        pdfText = await extractPdfTextFromUrl(anchor.href, MAX_PDF_PAGES);
+        pdfsParsed += 1;
+      } catch (error) {
+        console.error(`PDF parse failed for ${anchor.href}`, error);
+      }
+    }
+
+    const localContext = pdfText
+      ? `${anchor.text} ${anchor.href} ${pdfText}`
+      : `${anchor.text} ${anchor.contextText} ${anchor.href}`;
+
     const role = detectRole(localContext);
     const department = detectDepartment(localContext);
 
@@ -151,6 +175,102 @@ async function parseSourcePage(source) {
   return dedupeAds(ads);
 }
 
+function extractAnchorsWithContext(html, baseUrl) {
+  const anchors = [];
+  const regex = /<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+
+  let match;
+  while ((match = regex.exec(html)) !== null) {
+    const rawHref = match[1];
+    const text = cleanText(stripTags(match[2]));
+    const href = toAbsoluteUrl(rawHref, baseUrl);
+
+    if (!href) continue;
+    if (!text && !href.toLowerCase().endsWith(".pdf")) continue;
+    if (/^(mailto:|javascript:|tel:)/i.test(href)) continue;
+
+    const contextStart = Math.max(0, match.index - 600);
+    const contextEnd = Math.min(html.length, regex.lastIndex + 600);
+    const contextText = cleanText(stripTags(html.slice(contextStart, contextEnd)));
+
+    const joined = `${text} ${href} ${contextText}`.toLowerCase();
+    const isPdf = href.toLowerCase().endsWith(".pdf");
+
+    const looksRelevant =
+      joined.includes("faculty") ||
+      joined.includes("assistant professor") ||
+      joined.includes("associate professor") ||
+      joined.includes("recruit") ||
+      isPdf;
+
+    if (!looksRelevant) continue;
+
+    anchors.push({ href, text, contextText });
+  }
+
+  return anchors;
+}
+
+function looksLikeRelevantPdf(anchor) {
+  const href = anchor.href.toLowerCase();
+  if (!href.endsWith(".pdf")) return false;
+
+  const joined = `${anchor.text} ${anchor.contextText} ${anchor.href}`.toLowerCase();
+
+  return (
+    joined.includes("faculty") ||
+    joined.includes("assistant professor") ||
+    joined.includes("associate professor") ||
+    joined.includes("recruit") ||
+    joined.includes("advertisement") ||
+    joined.includes("rolling") ||
+    joined.includes("vacancy")
+  );
+}
+
+let pdfjsPromise = null;
+
+async function getPdfJs() {
+  if (!pdfjsPromise) {
+    pdfjsPromise = resolvePDFJS();
+  }
+  return pdfjsPromise;
+}
+
+async function extractPdfTextFromUrl(pdfUrl, maxPages = 5) {
+  const response = await fetch(pdfUrl, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 IIT-NIT-Faculty-Alert-Starter",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`PDF HTTP ${response.status} for ${pdfUrl}`);
+  }
+
+  const data = await response.arrayBuffer();
+  const { getDocument } = await getPdfJs();
+
+  const doc = await getDocument({
+    data,
+    useSystemFonts: true,
+  }).promise;
+
+  const pageCount = Math.min(doc.numPages, maxPages);
+  const pageTexts = [];
+
+  for (let i = 1; i <= pageCount; i++) {
+    const page = await doc.getPage(i);
+    const textContent = await page.getTextContent();
+    const text = textContent.items
+      .map((item) => ("str" in item ? item.str : ""))
+      .join(" ");
+    pageTexts.push(text);
+  }
+
+  return cleanText(pageTexts.join(" "));
+}
+
 const EXCLUDE_PATTERNS = [
   /\bshortlisted\b/i,
   /\bshortlist\b/i,
@@ -172,39 +292,28 @@ const EXCLUDE_PATTERNS = [
   /\bopen synopsis\b/i
 ];
 
-function extractAnchorsWithContext(html, baseUrl) {
-  const anchors = [];
-  const regex = /<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+const CURRENT_OPEN_PATTERNS = [
+  /\bapplications?\s+are\s+invited\b/i,
+  /\bapply\s+now\b/i,
+  /\bapplications?\s+opened\b/i,
+  /\bopen\s+now\b/i,
+  /\brolling advertisement\b/i,
+  /\bactive now\b/i,
+  /\bforms?\s+are\s+active now\b/i,
+  /\bregular drive is opened\b/i
+];
 
-  let match;
-  while ((match = regex.exec(html)) !== null) {
-    const rawHref = match[1];
-    const text = cleanText(stripTags(match[2]));
-    const href = toAbsoluteUrl(rawHref, baseUrl);
-
-    if (!href) continue;
-    if (!text && !href.toLowerCase().endsWith(".pdf")) continue;
-    if (/^(mailto:|javascript:|tel:)/i.test(href)) continue;
-
-    const contextStart = Math.max(0, match.index - 600);
-    const contextEnd = Math.min(html.length, regex.lastIndex + 600);
-    const contextText = cleanText(stripTags(html.slice(contextStart, contextEnd)));
-
-    const joined = `${text} ${href} ${contextText}`.toLowerCase();
-    const looksRelevant =
-      joined.includes("faculty") ||
-      joined.includes("assistant professor") ||
-      joined.includes("associate professor") ||
-      joined.includes("recruit") ||
-      href.toLowerCase().endsWith(".pdf");
-
-    if (!looksRelevant) continue;
-
-    anchors.push({ href, text, contextText });
-  }
-
-  return anchors;
-}
+const CLOSED_OR_POST_AD_PATTERNS = [
+  /\bclosed\b/i,
+  /\bshortlisted\b/i,
+  /\bshortlist\b/i,
+  /\binterview schedule\b/i,
+  /\bteaching presentation\b/i,
+  /\bscreening test\b/i,
+  /\bresult of faculty recruitment\b/i,
+  /\bresult\b/i,
+  /\bselection list\b/i
+];
 
 function detectRole(text) {
   const t = text.toLowerCase();
@@ -242,7 +351,7 @@ function detectDates(text) {
 function detectAdDate(text) {
   const patterns = [
     /ad(?:vertisement)?\s*date[^\w]{0,5}(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})/i,
-    /dated?[^\w]{0,5}(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})/i,
+    /dated?[^\w]{0,5}(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})/i
   ];
 
   for (const pattern of patterns) {
@@ -257,7 +366,7 @@ function detectDeadline(text) {
   const patterns = [
     /deadline[^\w]{0,5}(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})/i,
     /last\s+date[^\w]{0,5}(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})/i,
-    /closing\s+date[^\w]{0,5}(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})/i,
+    /closing\s+date[^\w]{0,5}(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})/i
   ];
 
   for (const pattern of patterns) {
@@ -267,29 +376,6 @@ function detectDeadline(text) {
 
   return null;
 }
-
-const CURRENT_OPEN_PATTERNS = [
-  /\bapplications?\s+are\s+invited\b/i,
-  /\bapply\s+now\b/i,
-  /\bapplications?\s+opened\b/i,
-  /\bopen\s+now\b/i,
-  /\brolling advertisement\b/i,
-  /\bactive now\b/i,
-  /\bforms?\s+are\s+active now\b/i,
-  /\bregular drive is opened\b/i,
-];
-
-const CLOSED_OR_POST_AD_PATTERNS = [
-  /\bclosed\b/i,
-  /\bshortlisted\b/i,
-  /\bshortlist\b/i,
-  /\binterview schedule\b/i,
-  /\bteaching presentation\b/i,
-  /\bscreening test\b/i,
-  /\bresult of faculty recruitment\b/i,
-  /\bresult\b/i,
-  /\bselection list\b/i,
-];
 
 function isCurrentOpening(text) {
   const t = text.toLowerCase();
