@@ -32,18 +32,18 @@ export const DEPARTMENT_RULES = [
     ]
   },
   {
-    label: "Computer Science",
-    patterns: [
-      /\bcomputer science\b/i,
-      /\bdepartment of computer science\b/i
-    ]
-  },
-  {
     label: "Computer Science and Engineering",
     patterns: [
       /\bcomputer science and engineering\b/i,
       /\bdepartment of computer science and engineering\b/i,
       /\bcse\b/i
+    ]
+  },
+  {
+    label: "Computer Science",
+    patterns: [
+      /\bcomputer science\b/i,
+      /\bdepartment of computer science\b/i
     ]
   }
 ];
