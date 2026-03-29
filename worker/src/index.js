@@ -7,9 +7,77 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-const MAX_PDFS_PER_SOURCE = 3;
-const MAX_PDF_PAGES = 5;
-const MAX_CHILD_PAGES_PER_SOURCE = 3;
+const USER_AGENT = "Mozilla/5.0 IIT-NIT-Faculty-Tracker/2.0";
+const MAX_CHILD_PAGES_PER_SOURCE = 4;
+const MAX_PDFS_PER_SOURCE = 4;
+const MAX_PDF_PAGES = 6;
+const MAX_ANCHORS_PER_PAGE = 120;
+const MAX_EVIDENCE_ITEMS_PER_SOURCE = 80;
+const ACTIVE_WITHOUT_DEADLINE_DAYS = 21;
+const BATCH_COUNT = 3;
+
+const ROLE_RULES = [
+  {
+    label: "Assistant Professor",
+    patterns: [
+      /\bassistant professor\b/i,
+      /\bassistant\s+prof\.\b/i,
+      /\bap\b/i,
+    ],
+  },
+  {
+    label: "Associate Professor",
+    patterns: [
+      /\bassociate professor\b/i,
+      /\bassociate\s+prof\.\b/i,
+    ],
+  },
+];
+
+const RECRUITMENT_KEYWORDS = [
+  "faculty",
+  "recruitment",
+  "advertisement",
+  "advt",
+  "notification",
+  "vacancy",
+  "vacancies",
+  "apply",
+  "application",
+  "applications",
+  "professor",
+  "rolling",
+  "special recruitment",
+  "special drive",
+  "teaching positions",
+  "faculty position",
+  "faculty positions",
+];
+
+const GENERIC_PATH_TOKENS = new Set([
+  "jobs",
+  "job",
+  "career",
+  "careers",
+  "recruitment",
+  "faculty",
+  "position",
+  "positions",
+  "advt",
+  "advertisement",
+  "notification",
+  "pdf",
+  "html",
+  "php",
+  "asp",
+  "aspx",
+  "index",
+  "uploads",
+  "sites",
+  "files",
+  "content",
+  "home",
+]);
 
 export default {
   async fetch(request, env) {
@@ -20,7 +88,11 @@ export default {
     }
 
     if (url.pathname === "/api/health") {
-      return json({ ok: true, time: new Date().toISOString() });
+      return json({
+        ok: true,
+        time: new Date().toISOString(),
+        version: "grouped-parser-v2",
+      });
     }
 
     if (url.pathname === "/api/ads") {
@@ -46,452 +118,913 @@ export default {
 
 async function runScan(env, forceAllBatches = false) {
   const now = new Date();
-  const minute = now.getUTCMinutes();
+  const nowIso = now.toISOString();
+  const currentBatch = now.getUTCMinutes() % BATCH_COUNT;
 
-  const batchCount = 3;
-  const currentBatch = minute % batchCount;
   const sourcesToCheck = forceAllBatches
     ? SOURCES
-    : SOURCES.filter((source) => source.batch === currentBatch);
+    : SOURCES.filter((source) => (source.batch ?? 0) === currentBatch);
 
-  const foundNow = [];
-  const newAds = [];
-  const previousAds = await loadActiveAds(env);
-  const previousIds = new Set(previousAds.map((ad) => ad.id));
+  const index = await loadBundleIndex(env);
+  const bundleMap = await loadBundleMap(env, index.ids || []);
+
+  const newlySeen = [];
+  const touchedIds = new Set();
+  const perSourceSummary = [];
 
   for (const source of sourcesToCheck) {
     try {
-      const ads = await parseSourcePage(source);
+      const bundles = await scanSourceToBundles(source);
 
-      for (const ad of ads) {
-        foundNow.push(ad);
+      const sourceTouched = [];
+      for (const bundle of bundles) {
+        const existing = bundleMap.get(bundle.id);
+        const merged = mergeBundle(existing, bundle, nowIso);
 
-        if (!previousIds.has(ad.id)) {
-          newAds.push(ad);
-          await env.ALERTS_KV.put(`seen:${ad.id}`, now.toISOString());
+        bundleMap.set(merged.id, merged);
+        touchedIds.add(merged.id);
+        sourceTouched.push(merged.id);
+
+        if (!existing) {
+          newlySeen.push(merged);
         }
       }
+
+      perSourceSummary.push({
+        sourceId: source.id,
+        institute: source.institute,
+        discoveredBundles: sourceTouched.length,
+      });
     } catch (error) {
       console.error(`Failed source ${source.id}`, error);
+      perSourceSummary.push({
+        sourceId: source.id,
+        institute: source.institute,
+        discoveredBundles: 0,
+        error: String(error?.message || error),
+      });
     }
   }
 
-  const mergedMap = new Map(previousAds.map((ad) => [ad.id, ad]));
-  for (const ad of foundNow) {
-    mergedMap.set(ad.id, ad);
+  const activeBundleIds = [];
+  const inactiveBundleIds = [];
+
+  for (const [bundleId, bundle] of bundleMap.entries()) {
+    const active = isBundleActive(bundle, now);
+    const nextBundle = {
+      ...bundle,
+      status: active ? "active" : "inactive",
+    };
+    bundleMap.set(bundleId, nextBundle);
+
+    if (active) {
+      activeBundleIds.push(bundleId);
+    } else {
+      inactiveBundleIds.push(bundleId);
+    }
   }
 
-  const freshActiveAds = sortAds([...mergedMap.values()]);
+  const nextIndexIds = [...new Set([...index.ids, ...bundleMap.keys()])];
+  await saveBundleIndex(env, { ids: nextIndexIds, updatedAt: nowIso });
 
-  await env.ALERTS_KV.put("activeAds", JSON.stringify(freshActiveAds));
-  await env.ALERTS_KV.put("lastScan", now.toISOString());
+  const writes = [];
+  for (const [bundleId, bundle] of bundleMap.entries()) {
+    writes.push(env.ALERTS_KV.put(bundleKey(bundleId), JSON.stringify(bundle)));
+  }
+  writes.push(env.ALERTS_KV.put("lastScan", nowIso));
+  await Promise.all(writes);
 
-  const sortedNewAds = sortAds(dedupeAds(newAds));
-  if (sortedNewAds.length > 0) {
-    await notifyNewAds(sortedNewAds, env);
+  const newActiveAds = sortAds(newlySeen.filter((b) => isBundleActive(b, now)).map(toApiAd));
+
+  if (newActiveAds.length > 0) {
+    await notifyNewAds(newActiveAds, env);
   }
 
   return {
     ok: true,
     checkedSources: sourcesToCheck.map((s) => s.id),
-    foundCount: freshActiveAds.length,
-    newCount: sortedNewAds.length,
-    newAds: sortedNewAds,
+    checkedCount: sourcesToCheck.length,
+    activeCount: activeBundleIds.length,
+    inactiveCount: inactiveBundleIds.length,
+    newCount: newActiveAds.length,
+    newAds: newActiveAds,
+    touchedBundles: touchedIds.size,
+    currentBatch: forceAllBatches ? "all" : currentBatch,
+    sources: perSourceSummary,
   };
 }
 
 async function loadActiveAds(env) {
-  const raw = await env.ALERTS_KV.get("activeAds");
-  if (!raw) return [];
-
-  try {
-    return JSON.parse(raw);
-  } catch {
+  const index = await loadBundleIndex(env);
+  if (!Array.isArray(index.ids) || index.ids.length === 0) {
     return [];
   }
-}
 
-async function parseSourcePage(source) {
-  const response = await fetch(source.pageUrl, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 IIT-NIT-Faculty-Alert-Starter",
-    },
-  });
+  const bundleMap = await loadBundleMap(env, index.ids);
+  const now = new Date();
 
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status} for ${source.pageUrl}`);
+  const ads = [];
+  for (const bundle of bundleMap.values()) {
+    if (isBundleActive(bundle, now)) {
+      ads.push(toApiAd(bundle));
+    }
   }
 
-  const html = await response.text();
-  const rootAnchors = extractAnchorsWithContext(html, source.pageUrl);
+  return sortAds(dedupeAds(ads));
+}
 
-  const allCandidateAds = [];
-  const visitedChildUrls = new Set();
-  let childPagesFetched = 0;
+async function loadBundleIndex(env) {
+  const raw = await env.ALERTS_KV.get("bundleIndex");
+  if (!raw) {
+    return { ids: [], updatedAt: null };
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      ids: Array.isArray(parsed.ids) ? parsed.ids : [],
+      updatedAt: parsed.updatedAt || null,
+    };
+  } catch {
+    return { ids: [], updatedAt: null };
+  }
+}
 
-  const rootAds = await parseAdsFromAnchors(rootAnchors, source);
-  allCandidateAds.push(...rootAds);
+async function saveBundleIndex(env, payload) {
+  await env.ALERTS_KV.put("bundleIndex", JSON.stringify(payload));
+}
 
-  for (const anchor of rootAnchors) {
-    if (childPagesFetched >= MAX_CHILD_PAGES_PER_SOURCE) break;
-    if (!isCrawlableChildPage(anchor, source.pageUrl)) continue;
-    if (visitedChildUrls.has(anchor.href)) continue;
-
-    visitedChildUrls.add(anchor.href);
-
+async function loadBundleMap(env, ids) {
+  const map = new Map();
+  for (const id of ids) {
+    const raw = await env.ALERTS_KV.get(bundleKey(id));
+    if (!raw) continue;
     try {
-      const childResponse = await fetch(anchor.href, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 IIT-NIT-Faculty-Alert-Starter",
-        },
+      const parsed = JSON.parse(raw);
+      map.set(id, parsed);
+    } catch {
+      // ignore bad record
+    }
+  }
+  return map;
+}
+
+function bundleKey(id) {
+  return `bundle:${id}`;
+}
+
+async function scanSourceToBundles(source) {
+  const rootHtml = await fetchText(source.pageUrl);
+  const rootPage = extractHtmlPage(rootHtml, source.pageUrl, {
+    sourceId: source.id,
+    institute: source.institute,
+    instituteType: source.instituteType,
+    pageKind: "root",
+  });
+
+  const rootRelevantAnchors = rootPage.anchors
+    .filter((a) => isRelevantLinkCandidate(a))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, MAX_ANCHORS_PER_PAGE);
+
+  const selectedChildAnchors = rootRelevantAnchors
+    .filter((a) => !a.isPdf && a.score >= 2)
+    .slice(0, MAX_CHILD_PAGES_PER_SOURCE);
+
+  const selectedPdfAnchors = rootRelevantAnchors
+    .filter((a) => a.isPdf)
+    .slice(0, MAX_PDFS_PER_SOURCE);
+
+  const evidenceItems = [];
+
+  evidenceItems.push(
+    makeEvidenceItem({
+      kind: "page-summary",
+      url: source.pageUrl,
+      parentUrl: null,
+      title: rootPage.title || `${source.institute} jobs`,
+      text: compactText(`${rootPage.title || ""} ${rootPage.pageText.slice(0, 2500)}`),
+      source,
+      score: pageLevelRecruitmentScore(rootPage.pageText),
+    })
+  );
+
+  for (const anchor of rootRelevantAnchors) {
+    evidenceItems.push(
+      makeEvidenceItem({
+        kind: "anchor",
+        url: anchor.url,
+        parentUrl: source.pageUrl,
+        title: anchor.text || anchor.title || "",
+        text: compactText(
+          [
+            anchor.heading,
+            anchor.text,
+            anchor.title,
+            anchor.context,
+            anchor.url,
+          ]
+            .filter(Boolean)
+            .join(" ")
+        ),
+        source,
+        score: anchor.score,
+      })
+    );
+  }
+
+  for (const anchor of selectedChildAnchors) {
+    try {
+      const childHtml = await fetchText(anchor.url);
+      const childPage = extractHtmlPage(childHtml, anchor.url, {
+        sourceId: source.id,
+        institute: source.institute,
+        instituteType: source.instituteType,
+        pageKind: "child",
       });
 
-      if (!childResponse.ok) continue;
+      evidenceItems.push(
+        makeEvidenceItem({
+          kind: "child-page",
+          url: anchor.url,
+          parentUrl: source.pageUrl,
+          title: childPage.title || anchor.text || "",
+          text: compactText(
+            [
+              childPage.title,
+              anchor.heading,
+              anchor.text,
+              childPage.pageText.slice(0, 3500),
+            ]
+              .filter(Boolean)
+              .join(" ")
+          ),
+          source,
+          score: Math.max(anchor.score, pageLevelRecruitmentScore(childPage.pageText)),
+        })
+      );
 
-      const childHtml = await childResponse.text();
-      const childAnchors = extractAnchorsWithContext(childHtml, anchor.href);
-      const childAds = await parseAdsFromAnchors(childAnchors, source);
+      const childRelevantAnchors = childPage.anchors
+        .filter((a) => isRelevantLinkCandidate(a))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 20);
 
-      allCandidateAds.push(...childAds);
-      childPagesFetched += 1;
+      for (const childAnchor of childRelevantAnchors) {
+        evidenceItems.push(
+          makeEvidenceItem({
+            kind: childAnchor.isPdf ? "pdf-link" : "child-anchor",
+            url: childAnchor.url,
+            parentUrl: anchor.url,
+            title: childAnchor.text || childAnchor.title || "",
+            text: compactText(
+              [
+                childAnchor.heading,
+                childAnchor.text,
+                childAnchor.title,
+                childAnchor.context,
+                childAnchor.url,
+              ]
+                .filter(Boolean)
+                .join(" ")
+            ),
+            source,
+            score: childAnchor.score,
+          })
+        );
+      }
+
+      const extraPdfs = childRelevantAnchors
+        .filter((a) => a.isPdf)
+        .slice(0, Math.max(0, MAX_PDFS_PER_SOURCE - selectedPdfAnchors.length));
+
+      for (const pdfAnchor of extraPdfs) {
+        try {
+          const pdfText = await extractPdfText(pdfAnchor.url, MAX_PDF_PAGES);
+          evidenceItems.push(
+            makeEvidenceItem({
+              kind: "pdf",
+              url: pdfAnchor.url,
+              parentUrl: anchor.url,
+              title: pdfAnchor.text || pdfAnchor.title || fileNameFromUrl(pdfAnchor.url),
+              text: compactText(
+                [
+                  pdfAnchor.heading,
+                  pdfAnchor.text,
+                  pdfAnchor.title,
+                  pdfText,
+                ]
+                  .filter(Boolean)
+                  .join(" ")
+              ),
+              source,
+              score: Math.max(3, pdfAnchor.score + 1),
+            })
+          );
+        } catch (error) {
+          console.error(`Failed PDF ${pdfAnchor.url}`, error);
+        }
+      }
     } catch (error) {
-      console.error(`Child page parse failed for ${anchor.href}`, error);
+      console.error(`Failed child page ${anchor.url}`, error);
     }
   }
 
-  return dedupeAds(allCandidateAds);
+  for (const anchor of selectedPdfAnchors) {
+    try {
+      const pdfText = await extractPdfText(anchor.url, MAX_PDF_PAGES);
+      evidenceItems.push(
+        makeEvidenceItem({
+          kind: "pdf",
+          url: anchor.url,
+          parentUrl: source.pageUrl,
+          title: anchor.text || anchor.title || fileNameFromUrl(anchor.url),
+          text: compactText(
+            [
+              anchor.heading,
+              anchor.text,
+              anchor.title,
+              anchor.context,
+              pdfText,
+            ]
+              .filter(Boolean)
+              .join(" ")
+          ),
+          source,
+          score: Math.max(3, anchor.score + 1),
+        })
+      );
+    } catch (error) {
+      console.error(`Failed PDF ${anchor.url}`, error);
+    }
+  }
+
+  const compactEvidence = evidenceItems
+    .filter((item) => item.score >= 1)
+    .slice(0, MAX_EVIDENCE_ITEMS_PER_SOURCE);
+
+  const clusters = clusterEvidence(compactEvidence, source);
+  const bundles = [];
+
+  for (const cluster of clusters) {
+    const bundle = buildBundleFromCluster(cluster, source);
+    if (bundle) {
+      bundles.push(bundle);
+    }
+  }
+
+  return dedupeBundles(bundles);
 }
 
-function extractAnchorsWithContext(html, baseUrl) {
+function extractHtmlPage(html, pageUrl, meta = {}) {
+  const cleanedHtml = html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ");
+
+  const titleMatch = cleanedHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const pageTitle = compactText(titleMatch ? decodeHtml(titleMatch[1]) : "");
+
   const anchors = [];
-  const regex = /<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-
+  const anchorRegex = /<a\b([^>]*?)href\s*=\s*["']([^"']+)["']([^>]*)>([\s\S]*?)<\/a>/gi;
   let match;
-  while ((match = regex.exec(html)) !== null) {
-    const rawHref = match[1];
-    const text = cleanText(stripTags(match[2]));
-    const href = toAbsoluteUrl(rawHref, baseUrl);
 
-    if (!href) continue;
-    if (!text && !href.toLowerCase().endsWith(".pdf")) continue;
-    if (/^(mailto:|javascript:|tel:)/i.test(href)) continue;
+  while ((match = anchorRegex.exec(cleanedHtml)) !== null) {
+    const rawHref = match[2];
+    const absoluteUrl = safeUrl(rawHref, pageUrl);
+    if (!absoluteUrl) continue;
 
-    const contextStart = Math.max(0, match.index - 600);
-    const contextEnd = Math.min(html.length, regex.lastIndex + 600);
-    const contextText = cleanText(stripTags(html.slice(contextStart, contextEnd)));
+    const attrs = `${match[1] || ""} ${match[3] || ""}`;
+    const text = compactText(stripTags(match[4] || ""));
+    const titleAttr = compactText(extractAttr(attrs, "title"));
+    const snippet = cleanedHtml.slice(Math.max(0, match.index - 600), Math.min(cleanedHtml.length, match.index + 1200));
+    const context = compactText(stripTags(snippet));
+    const heading = nearestHeadingText(cleanedHtml, match.index);
 
-    const joined = `${text} ${href} ${contextText}`.toLowerCase();
-    const isPdf = href.toLowerCase().endsWith(".pdf");
+    const anchor = {
+      url: absoluteUrl,
+      text,
+      title: titleAttr,
+      context,
+      heading,
+      isPdf: /\.pdf(\?|#|$)/i.test(absoluteUrl),
+      score: linkScore({ url: absoluteUrl, text, title: titleAttr, context, heading }),
+    };
 
-    const looksRelevant =
-      joined.includes("faculty") ||
-      joined.includes("assistant professor") ||
-      joined.includes("associate professor") ||
-      joined.includes("recruit") ||
-      isPdf;
-
-    if (!looksRelevant) continue;
-
-    anchors.push({ href, text, contextText });
+    anchors.push(anchor);
   }
 
-  return anchors;
-}
-
-function looksLikeRelevantPdf(anchor) {
-  const href = anchor.href.toLowerCase();
-  if (!href.endsWith(".pdf")) return false;
-
-  const joined = `${anchor.text} ${anchor.contextText} ${anchor.href}`.toLowerCase();
-
-  return (
-    joined.includes("faculty") ||
-    joined.includes("assistant professor") ||
-    joined.includes("associate professor") ||
-    joined.includes("recruit") ||
-    joined.includes("advertisement") ||
-    joined.includes("rolling") ||
-    joined.includes("vacancy")
-  );
-}
-
-let pdfjsPromise = null;
-
-async function getPdfJs() {
-  if (!pdfjsPromise) {
-    pdfjsPromise = resolvePDFJS();
-  }
-  return pdfjsPromise;
-}
-
-async function extractPdfTextFromUrl(pdfUrl, maxPages = 5) {
-  const response = await fetch(pdfUrl, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 IIT-NIT-Faculty-Alert-Starter",
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`PDF HTTP ${response.status} for ${pdfUrl}`);
-  }
-
-  const data = await response.arrayBuffer();
-  const { getDocument } = await getPdfJs();
-
-  const doc = await getDocument({
-    data,
-    useSystemFonts: true,
-  }).promise;
-
-  const pageCount = Math.min(doc.numPages, maxPages);
-  const pageTexts = [];
-
-  for (let i = 1; i <= pageCount; i++) {
-    const page = await doc.getPage(i);
-    const textContent = await page.getTextContent();
-    const text = textContent.items
-      .map((item) => ("str" in item ? item.str : ""))
-      .join(" ");
-    pageTexts.push(text);
-  }
-
-  return cleanText(pageTexts.join(" "));
-}
-
-async function parseAdsFromAnchors(anchors, source) {
-  const ads = [];
-  let pdfsParsed = 0;
-
-  for (const anchor of anchors) {
-    let pdfText = "";
-
-    if (pdfsParsed < MAX_PDFS_PER_SOURCE && looksLikeRelevantPdf(anchor)) {
-      try {
-        pdfText = await extractPdfTextFromUrl(anchor.href, MAX_PDF_PAGES);
-        pdfsParsed += 1;
-      } catch (error) {
-        console.error(`PDF parse failed for ${anchor.href}`, error);
-      }
-    }
-
-    const localContext = pdfText
-      ? `${anchor.text} ${anchor.href} ${pdfText}`
-      : `${anchor.text} ${anchor.contextText} ${anchor.href}`;
-
-    const role = detectRole(localContext);
-    const department = detectDepartment(localContext);
-
-    if (!role || !department) continue;
-
-    const localDateHints = detectDates(localContext);
-    const adDate = detectAdDate(localContext) || localDateHints.firstDate || "Not stated";
-    const deadline = detectDeadline(localContext) || localDateHints.secondDate || "Not stated";
-    const title = cleanText(anchor.text) || `${source.institute} recruitment`;
-
-    if (!isCurrentOpening(`${title} ${localContext}`)) continue;
-
-    const id = makeId(`${source.institute}|${title}|${anchor.href}|${role}|${department}`);
-
-    ads.push({
-      id,
-      instituteType: source.instituteType,
-      institute: source.institute,
-      role,
-      department,
-      adDate,
-      deadline,
-      url: anchor.href,
-      title,
-      sourcePage: source.pageUrl,
-      firstSeen: new Date().toISOString(),
-    });
-  }
-
-  return ads;
-}
-
-function isCrawlableChildPage(anchor, sourcePageUrl) {
-  const href = (anchor.href || "").toLowerCase();
-
-  if (!href) return false;
-  if (href.endsWith(".pdf")) return false;
-  if (href.endsWith(".jpg") || href.endsWith(".jpeg") || href.endsWith(".png") || href.endsWith(".gif")) return false;
-  if (href.endsWith(".doc") || href.endsWith(".docx") || href.endsWith(".xls") || href.endsWith(".xlsx")) return false;
-  if (href.endsWith(".ppt") || href.endsWith(".pptx") || href.endsWith(".zip")) return false;
-
-  let sameHost = false;
-  try {
-    sameHost = new URL(anchor.href).host === new URL(sourcePageUrl).host;
-  } catch {
-    sameHost = false;
-  }
-
-  if (!sameHost) return false;
-
-  const joined = `${anchor.text} ${anchor.href}`.toLowerCase();
-
-  const likelyFacultyChildPage =
-    joined.includes("faculty recruitment") ||
-    joined.includes("faculty positions") ||
-    joined.includes("recruitment notification for faculty positions") ||
-    joined.includes("faculty-rolling-advertisement") ||
-    joined.includes("advertisement-for-faculty-positions");
-
-  const obviousNonFacultyPage =
-    joined.includes("jrf") ||
-    joined.includes("project associate") ||
-    joined.includes("project assistant") ||
-    joined.includes("walk in interview") ||
-    joined.includes("group a") ||
-    joined.includes("group b") ||
-    joined.includes("group c") ||
-    joined.includes("non teaching") ||
-    joined.includes("temporary") ||
-    joined.includes("consultant");
-
-  return likelyFacultyChildPage && !obviousNonFacultyPage;
-}
-
-const EXCLUDE_PATTERNS = [
-  /\bshortlisted\b/i,
-  /\bshortlist\b/i,
-  /\binterview schedule\b/i,
-  /\bteaching presentation\b/i,
-  /\bscreening test\b/i,
-  /\bresult of faculty recruitment\b/i,
-  /\bresult\b/i,
-  /\bshort term course\b/i,
-  /\bworkshop\b/i,
-  /\bconference\b/i,
-  /\btraining\b/i,
-  /\bselected candidates?\b/i,
-  /\badmissions?\b/i,
-  /\bph\.?d\b/i,
-  /\bvisvesvaraya\b/i,
-  /\bviva-voce\b/i,
-  /\bsynopsis seminar\b/i,
-  /\bopen synopsis\b/i
-];
-
-const CURRENT_OPEN_PATTERNS = [
-  /\bapplications?\s+are\s+invited\b/i,
-  /\bapply\s+now\b/i,
-  /\bapplications?\s+opened\b/i,
-  /\bopen\s+now\b/i,
-  /\brolling advertisement\b/i,
-  /\bactive now\b/i,
-  /\bforms?\s+are\s+active now\b/i,
-  /\bregular drive is opened\b/i
-];
-
-const CLOSED_OR_POST_AD_PATTERNS = [
-  /\bclosed\b/i,
-  /\bshortlisted\b/i,
-  /\bshortlist\b/i,
-  /\binterview schedule\b/i,
-  /\bteaching presentation\b/i,
-  /\bscreening test\b/i,
-  /\bresult of faculty recruitment\b/i,
-  /\bresult\b/i,
-  /\bselection list\b/i
-];
-
-function detectRole(text) {
-  const t = text.toLowerCase();
-  const hasAssistant = /\bassistant professor\b/.test(t);
-  const hasAssociate = /\bassociate professor\b/.test(t);
-
-  if (hasAssistant && hasAssociate) return "Assistant Professor / Associate Professor";
-  if (hasAssistant) return "Assistant Professor";
-  if (hasAssociate) return "Associate Professor";
-  return null;
-}
-
-function detectDepartment(text) {
-  for (const rule of DEPARTMENT_RULES) {
-    for (const pattern of rule.patterns) {
-      if (pattern.test(text)) {
-        return rule.label;
-      }
-    }
-  }
-  return null;
-}
-
-function detectDates(text) {
-  const matches = [...text.matchAll(/\b(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\b/g)]
-    .map((m) => normalizeDate(m[1]))
-    .filter(Boolean);
+  const pageText = compactText(stripTags(cleanedHtml));
 
   return {
-    firstDate: matches[0] || null,
-    secondDate: matches[1] || null,
+    ...meta,
+    url: pageUrl,
+    title: pageTitle,
+    pageText,
+    anchors,
   };
 }
 
-function detectAdDate(text) {
+function nearestHeadingText(html, index) {
+  const window = html.slice(Math.max(0, index - 1500), index);
+  const matches = [...window.matchAll(/<(h[1-6]|strong|b)[^>]*>([\s\S]*?)<\/\1>/gi)];
+  if (matches.length === 0) return "";
+  const last = matches[matches.length - 1];
+  return compactText(stripTags(last[2] || ""));
+}
+
+function makeEvidenceItem({ kind, url, parentUrl, title, text, source, score }) {
+  const mergedText = compactText([title, text, url].filter(Boolean).join(" "));
+  return {
+    kind,
+    url,
+    parentUrl,
+    title: compactText(title || ""),
+    text: mergedText,
+    sourceId: source.id,
+    institute: source.institute,
+    instituteType: source.instituteType,
+    score: Math.max(0, score || 0),
+    adNumber: extractAdvertisementNumber(mergedText),
+    year: extractLikelyYear(mergedText, url),
+    roles: extractRoles(mergedText),
+    departments: extractDepartments(mergedText),
+    fingerprint: computeEvidenceFingerprint(mergedText, url),
+  };
+}
+
+function isRelevantLinkCandidate(anchor) {
+  const full = compactText(
+    [anchor.heading, anchor.text, anchor.title, anchor.context, anchor.url].filter(Boolean).join(" ")
+  ).toLowerCase();
+
+  if (!full) return false;
+  if (/\b(staff nurse|non[-\s]?teaching|administrative|tender|quotation|result|syllabus|exam|student)\b/i.test(full)) {
+    return false;
+  }
+
+  const hasRecruitmentSignal =
+    RECRUITMENT_KEYWORDS.some((kw) => full.includes(kw)) ||
+    ROLE_RULES.some((r) => r.patterns.some((p) => p.test(full)));
+
+  return hasRecruitmentSignal || /\.pdf(\?|#|$)/i.test(anchor.url);
+}
+
+function pageLevelRecruitmentScore(text) {
+  const t = (text || "").toLowerCase();
+  let score = 0;
+  if (t.includes("faculty")) score += 1;
+  if (t.includes("recruitment")) score += 2;
+  if (t.includes("assistant professor")) score += 2;
+  if (t.includes("associate professor")) score += 2;
+  if (t.includes("deadline")) score += 1;
+  if (t.includes("last date")) score += 1;
+  return score;
+}
+
+function linkScore({ url, text, title, context, heading }) {
+  const full = compactText([heading, text, title, context, url].filter(Boolean).join(" ")).toLowerCase();
+  let score = 0;
+
+  if (/\.pdf(\?|#|$)/i.test(url)) score += 2;
+  if (full.includes("faculty")) score += 2;
+  if (full.includes("recruitment")) score += 2;
+  if (full.includes("advertisement")) score += 2;
+  if (full.includes("notification")) score += 1;
+  if (full.includes("vacancy")) score += 1;
+  if (full.includes("apply")) score += 1;
+  if (full.includes("assistant professor")) score += 3;
+  if (full.includes("associate professor")) score += 3;
+  if (full.includes("rolling")) score += 1;
+  if (full.includes("special recruitment")) score += 2;
+  if (full.includes("special drive")) score += 2;
+  if (extractLikelyYear(full, url)) score += 1;
+
+  if (/\b(staff nurse|non[-\s]?teaching|administrative|tender|quotation|result|student)\b/i.test(full)) {
+    score -= 4;
+  }
+
+  return score;
+}
+
+function clusterEvidence(evidenceItems, source) {
+  const groups = new Map();
+
+  for (const item of evidenceItems) {
+    const key = computeClusterKey(item, source);
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key).push(item);
+  }
+
+  const clusters = [...groups.entries()]
+    .map(([key, items]) => ({
+      key,
+      items: items.sort((a, b) => b.score - a.score),
+    }))
+    .filter((cluster) => cluster.items.length > 0)
+    .sort((a, b) => clusterScore(b) - clusterScore(a));
+
+  return clusters;
+}
+
+function clusterScore(cluster) {
+  return cluster.items.reduce((sum, item) => sum + item.score, 0) + cluster.items.length;
+}
+
+function computeClusterKey(item, source) {
+  const base = compactText([item.title, item.text].filter(Boolean).join(" ")).toLowerCase();
+
+  const adNo = item.adNumber ? `adno-${item.adNumber}` : "";
+  const year = item.year ? `y-${item.year}` : "";
+
+  let phrase = "";
+  if (/\bspecial recruitment drive\b/i.test(base)) phrase = "special-recruitment-drive";
+  else if (/\bspecial recruitment\b/i.test(base)) phrase = "special-recruitment";
+  else if (/\brolling advertisement\b/i.test(base)) phrase = "rolling-advertisement";
+  else if (/\bfaculty recruitment\b/i.test(base)) phrase = "faculty-recruitment";
+  else if (/\bfaculty positions?\b/i.test(base)) phrase = "faculty-position";
+  else if (/\bassistant professor\b/i.test(base) && /\bassociate professor\b/i.test(base)) phrase = "ap-plus-assoc";
+  else if (/\bassistant professor\b/i.test(base)) phrase = "assistant-professor";
+  else if (/\bassociate professor\b/i.test(base)) phrase = "associate-professor";
+
+  const stem = pathStem(item.url);
+  const roleStem = item.roles.map((r) => r.toLowerCase().replace(/\s+/g, "-")).sort().join("-");
+  const deptStem = item.departments.map((d) => d.toLowerCase().replace(/\s+/g, "-")).sort().join("-").slice(0, 60);
+
+  const rawKey = [
+    source.institute.toLowerCase().replace(/\s+/g, "-"),
+    adNo,
+    year,
+    phrase,
+    roleStem,
+    deptStem,
+    stem,
+  ]
+    .filter(Boolean)
+    .join("|");
+
+  return rawKey || `${source.id}|fallback`;
+}
+
+function pathStem(url) {
+  try {
+    const u = new URL(url);
+    const parts = u.pathname
+      .toLowerCase()
+      .split("/")
+      .flatMap((p) => p.split(/[_\-\.]+/))
+      .filter(Boolean)
+      .filter((p) => !GENERIC_PATH_TOKENS.has(p))
+      .filter((p) => !/^\d+$/.test(p));
+
+    return parts.slice(0, 5).join("-");
+  } catch {
+    return "";
+  }
+}
+
+function buildBundleFromCluster(cluster, source) {
+  const mergedText = compactText(cluster.items.map((i) => i.text).join(" "));
+  const roles = extractRoles(mergedText);
+  const departments = extractDepartments(mergedText);
+
+  if (roles.length === 0 || departments.length === 0) {
+    return null;
+  }
+
+  const deadline = extractDeadline(mergedText);
+  const adDate = extractAdDate(mergedText);
+  const adNumber = extractAdvertisementNumber(mergedText);
+
+  const canonical = chooseCanonicalItem(cluster.items);
+  const title = chooseBundleTitle(cluster.items, roles, departments, source);
+  const bundleId = stableId(
+    [
+      source.institute,
+      adNumber || "",
+      adDate || "",
+      deadline || "",
+      roles.slice().sort().join("|"),
+      departments.slice().sort().join("|"),
+      pathStem(canonical.url || ""),
+      extractLikelyYear(mergedText, canonical.url || "") || "",
+    ].join("||")
+  );
+
+  const urlList = [...new Set(cluster.items.map((i) => i.url).filter(Boolean))];
+  const summary = compactText(
+    [
+      title,
+      adNumber ? `Advt ${adNumber}` : "",
+      adDate ? `Ad date ${adDate}` : "",
+      deadline ? `Deadline ${deadline}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ")
+  );
+
+  const bundle = {
+    id: bundleId,
+    institute: source.institute,
+    instituteType: source.instituteType,
+    sourceId: source.id,
+    sourceUrl: source.pageUrl,
+    url: canonical.url || source.pageUrl,
+    canonicalUrl: canonical.url || source.pageUrl,
+    evidenceUrls: urlList,
+    evidenceKinds: [...new Set(cluster.items.map((i) => i.kind))],
+    evidenceCount: cluster.items.length,
+    title,
+    role: roles.join(" / "),
+    department: departments.join(" / "),
+    roles,
+    departments,
+    adDate: adDate || null,
+    deadline: deadline || null,
+    adNumber: adNumber || null,
+    year: extractLikelyYear(mergedText, canonical.url || "") || null,
+    summary,
+    textSample: mergedText.slice(0, 4000),
+    clusterKey: cluster.key,
+    score: clusterScore(cluster),
+    status: "active",
+  };
+
+  return bundle;
+}
+
+function chooseCanonicalItem(items) {
+  const sorted = [...items].sort((a, b) => {
+    const kindRank = kindPriority(b.kind) - kindPriority(a.kind);
+    if (kindRank !== 0) return kindRank;
+    return b.score - a.score;
+  });
+  return sorted[0] || items[0];
+}
+
+function kindPriority(kind) {
+  if (kind === "pdf") return 5;
+  if (kind === "child-page") return 4;
+  if (kind === "pdf-link") return 3;
+  if (kind === "anchor") return 2;
+  return 1;
+}
+
+function chooseBundleTitle(items, roles, departments, source) {
+  const best = chooseCanonicalItem(items);
+  const bestTitle = compactText(best?.title || "");
+
+  if (bestTitle && bestTitle.length >= 8) {
+    return bestTitle;
+  }
+
+  if (roles.length > 0 && departments.length > 0) {
+    return `${roles.join(" / ")} in ${departments.join(" / ")} at ${source.institute}`;
+  }
+
+  return `Faculty advertisement at ${source.institute}`;
+}
+
+function mergeBundle(existing, incoming, nowIso) {
+  if (!existing) {
+    return {
+      ...incoming,
+      firstSeenAt: nowIso,
+      lastSeenAt: nowIso,
+      status: "active",
+    };
+  }
+
+  const richer = incoming.textSample && incoming.textSample.length > (existing.textSample || "").length ? incoming : existing;
+  const canonicalUrl =
+    incoming.url && /\.pdf(\?|#|$)/i.test(incoming.url) ? incoming.url : existing.canonicalUrl || incoming.url;
+
+  return {
+    ...richer,
+    firstSeenAt: existing.firstSeenAt || nowIso,
+    lastSeenAt: nowIso,
+    url: canonicalUrl || incoming.url || existing.url,
+    canonicalUrl: canonicalUrl || incoming.canonicalUrl || existing.canonicalUrl,
+    evidenceUrls: [...new Set([...(existing.evidenceUrls || []), ...(incoming.evidenceUrls || [])])],
+    evidenceKinds: [...new Set([...(existing.evidenceKinds || []), ...(incoming.evidenceKinds || [])])],
+    evidenceCount: Math.max(existing.evidenceCount || 0, incoming.evidenceCount || 0),
+    score: Math.max(existing.score || 0, incoming.score || 0),
+    adDate: incoming.adDate || existing.adDate || null,
+    deadline: incoming.deadline || existing.deadline || null,
+    adNumber: incoming.adNumber || existing.adNumber || null,
+    role: incoming.role || existing.role,
+    department: incoming.department || existing.department,
+    roles: mergeStringArrays(existing.roles, incoming.roles),
+    departments: mergeStringArrays(existing.departments, incoming.departments),
+    summary: incoming.summary || existing.summary,
+    textSample:
+      (incoming.textSample || "").length >= (existing.textSample || "").length
+        ? incoming.textSample
+        : existing.textSample,
+    status: "active",
+  };
+}
+
+function mergeStringArrays(a = [], b = []) {
+  return [...new Set([...(a || []), ...(b || [])])];
+}
+
+function isBundleActive(bundle, now = new Date()) {
+  if (!bundle) return false;
+
+  const deadlineDate = parseDateForComparison(bundle.deadline);
+  if (deadlineDate) {
+    const grace = new Date(deadlineDate);
+    grace.setDate(grace.getDate() + 1);
+    return grace >= now;
+  }
+
+  const lastSeen = parseDateForComparison(bundle.lastSeenAt);
+  if (!lastSeen) return true;
+
+  const cutoff = new Date(now);
+  cutoff.setDate(cutoff.getDate() - ACTIVE_WITHOUT_DEADLINE_DAYS);
+
+  return lastSeen >= cutoff;
+}
+
+function toApiAd(bundle) {
+  return {
+    id: bundle.id,
+    instituteType: bundle.instituteType,
+    institute: bundle.institute,
+    role: bundle.role || "Not stated",
+    department: bundle.department || "Not stated",
+    adDate: bundle.adDate || "Not stated",
+    deadline: bundle.deadline || "Not stated",
+    url: bundle.url || bundle.sourceUrl,
+    title: bundle.title || "",
+    sourceUrl: bundle.sourceUrl || "",
+    adNumber: bundle.adNumber || "",
+    evidenceCount: bundle.evidenceCount || 0,
+  };
+}
+
+function dedupeBundles(bundles) {
+  const map = new Map();
+
+  for (const bundle of bundles) {
+    const semanticKey = [
+      bundle.institute,
+      bundle.adNumber || "",
+      bundle.adDate || "",
+      bundle.deadline || "",
+      (bundle.roles || []).slice().sort().join("|"),
+      (bundle.departments || []).slice().sort().join("|"),
+    ].join("||");
+
+    const existing = map.get(semanticKey);
+    if (!existing || (bundle.textSample || "").length > (existing.textSample || "").length) {
+      map.set(semanticKey, bundle);
+    }
+  }
+
+  return [...map.values()];
+}
+
+function dedupeAds(ads) {
+  const map = new Map();
+  for (const ad of ads) {
+    const key = [
+      ad.institute || "",
+      ad.role || "",
+      ad.department || "",
+      ad.adDate || "",
+      ad.deadline || "",
+    ].join("||");
+    if (!map.has(key)) {
+      map.set(key, ad);
+    }
+  }
+  return [...map.values()];
+}
+
+function sortAds(ads) {
+  return [...ads].sort((a, b) => {
+    const da = parseDateForComparison(a.deadline) || parseDateForComparison(a.adDate) || new Date(0);
+    const db = parseDateForComparison(b.deadline) || parseDateForComparison(b.adDate) || new Date(0);
+    return db - da;
+  });
+}
+
+function extractRoles(text) {
+  const matches = [];
+  for (const rule of ROLE_RULES) {
+    if (rule.patterns.some((pattern) => pattern.test(text))) {
+      matches.push(rule.label);
+    }
+  }
+  return matches;
+}
+
+function extractDepartments(text) {
+  const matches = [];
+  for (const rule of DEPARTMENT_RULES) {
+    if (rule.patterns.some((pattern) => pattern.test(text))) {
+      matches.push(rule.label);
+    }
+  }
+  return matches;
+}
+
+function extractAdvertisementNumber(text) {
   const patterns = [
-    /ad(?:vertisement)?\s*date[^\w]{0,5}(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})/i,
-    /dated?[^\w]{0,5}(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})/i
+    /\b(?:advt\.?|advertisement|advt\s*no\.?|advertisement\s*no\.?)\s*[:\-]?\s*([A-Za-z0-9\/.\-]+)\b/i,
+    /\bno\.?\s*[:\-]?\s*([A-Za-z0-9\/.\-]{4,})\b/i,
   ];
 
   for (const pattern of patterns) {
-    const m = text.match(pattern);
-    if (m) return normalizeDate(m[1]);
+    const match = text.match(pattern);
+    if (match) {
+      return match[1].trim();
+    }
   }
-
   return null;
 }
 
-function detectDeadline(text) {
+function extractAdDate(text) {
   const patterns = [
-    /deadline[^\w]{0,5}(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})/i,
-    /last\s+date[^\w]{0,5}(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})/i,
-    /closing\s+date[^\w]{0,5}(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})/i
+    /\b(?:date of publication|published on|publication date|date of advertisement|advertisement date|date)\s*[:\-]?\s*([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{2,4}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})\b/i,
+    /\bdated\s*[:\-]?\s*([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{2,4}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})\b/i,
   ];
 
   for (const pattern of patterns) {
-    const m = text.match(pattern);
-    if (m) return normalizeDate(m[1]);
+    const match = text.match(pattern);
+    if (match) {
+      return normalizeDate(match[1]);
+    }
   }
 
-  return null;
+  const allDates = extractAllCandidateDates(text);
+  return allDates.length > 0 ? allDates[0] : null;
 }
 
-function isCurrentOpening(text) {
-  const t = text.toLowerCase();
+function extractDeadline(text) {
+  const patterns = [
+    /\b(?:last date(?: for .*?)?|closing date|closing on|deadline|last\s+date\s+for\s+submission|last date of receipt of application(?:s)?|last date to apply|apply by)\s*[:\-]?\s*([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{2,4}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})\b/i,
+    /\b(?:applications? .*? accepted .*? till)\s*([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{2,4}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})\b/i,
+  ];
 
-  for (const pattern of EXCLUDE_PATTERNS) {
-    if (pattern.test(t)) return false;
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      return normalizeDate(match[1]);
+    }
   }
 
-  for (const pattern of CLOSED_OR_POST_AD_PATTERNS) {
-    if (pattern.test(t)) return false;
-  }
+  const futureDates = extractAllCandidateDates(text)
+    .map((d) => ({ raw: d, date: parseDateForComparison(d) }))
+    .filter((x) => x.date)
+    .sort((a, b) => a.date - b.date);
 
-  for (const pattern of CURRENT_OPEN_PATTERNS) {
-    if (pattern.test(t)) return true;
-  }
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
-  return hasFutureDate(text);
+  const nextFuture = futureDates.find((x) => x.date >= today);
+  return nextFuture ? normalizeDate(nextFuture.raw) : null;
 }
 
-function hasFutureDate(text) {
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
-
-  for (const match of text.matchAll(/\b(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\b/g)) {
-    const d = parseDateForComparison(match[1]);
-    if (d && d >= now) return true;
+function extractAllCandidateDates(text) {
+  const matches = [];
+  const regex = /\b([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{2,4}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})\b/g;
+  for (const match of text.matchAll(regex)) {
+    const normalized = normalizeDate(match[1]);
+    if (normalized) matches.push(normalized);
   }
+  return [...new Set(matches)];
+}
 
-  return false;
+function extractLikelyYear(text, url = "") {
+  const merged = `${text} ${url}`;
+  const years = [...merged.matchAll(/\b(20[2-4][0-9])\b/g)].map((m) => m[1]);
+  if (years.length === 0) return null;
+  const counts = new Map();
+  for (const y of years) counts.set(y, (counts.get(y) || 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+}
+
+function normalizeDate(raw) {
+  if (!raw) return null;
+  const date = parseDateForComparison(raw);
+  if (!date) return null;
+  return date.toISOString().slice(0, 10);
 }
 
 function parseDateForComparison(raw) {
   if (!raw) return null;
+  if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? null : raw;
 
-  const trimmed = raw.trim();
+  const trimmed = String(raw).trim();
+  if (!trimmed) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+    const d = new Date(trimmed);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
 
   if (/^\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}$/.test(trimmed)) {
     const d = new Date(trimmed);
@@ -500,7 +1033,6 @@ function parseDateForComparison(raw) {
 
   const cleaned = trimmed.replace(/\./g, "/").replace(/-/g, "/");
   const parts = cleaned.split("/");
-
   if (parts.length !== 3) return null;
 
   let [dd, mm, yyyy] = parts;
@@ -510,182 +1042,127 @@ function parseDateForComparison(raw) {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-function normalizeDate(raw) {
-  if (!raw) return null;
-
-  const trimmed = raw.trim();
-
-  if (/^\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}$/.test(trimmed)) {
-    const date = new Date(trimmed);
-    if (Number.isNaN(date.getTime())) return trimmed;
-    return formatDate(date);
+async function extractPdfText(url, maxPages = MAX_PDF_PAGES) {
+  const response = await fetch(url, {
+    headers: { "User-Agent": USER_AGENT },
+  });
+  if (!response.ok) {
+    throw new Error(`PDF fetch failed ${response.status} for ${url}`);
   }
 
-  const cleaned = trimmed.replace(/\./g, "/").replace(/-/g, "/");
-  const parts = cleaned.split("/");
+  const data = await response.arrayBuffer();
+  const pdfjs = await resolvePDFJS();
+  const loadingTask = pdfjs.getDocument({ data });
+  const pdf = await loadingTask.promise;
 
-  if (parts.length !== 3) return trimmed;
+  const pages = Math.min(pdf.numPages, maxPages);
+  let combined = "";
 
-  let [dd, mm, yyyy] = parts;
-  if (yyyy.length === 2) yyyy = `20${yyyy}`;
+  for (let i = 1; i <= pages; i += 1) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const pageText = content.items.map((item) => item.str || "").join(" ");
+    combined += ` ${pageText}`;
+  }
 
-  const date = new Date(Date.UTC(Number(yyyy), Number(mm) - 1, Number(dd)));
-  if (Number.isNaN(date.getTime())) return trimmed;
-
-  return formatDate(date);
+  return compactText(combined);
 }
 
-function formatDate(date) {
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(date);
-}
-
-function sortAds(ads) {
-  return [...ads].sort((a, b) => {
-    const da = deadlineSortValue(a.deadline);
-    const db = deadlineSortValue(b.deadline);
-
-    if (da !== db) return da - db;
-    return (a.institute || "").localeCompare(b.institute || "");
+async function fetchText(url) {
+  const response = await fetch(url, {
+    headers: { "User-Agent": USER_AGENT },
   });
-}
 
-function deadlineSortValue(deadline) {
-  if (!deadline || deadline === "Not stated") return Number.MAX_SAFE_INTEGER;
+  if (!response.ok) {
+    throw new Error(`Fetch failed ${response.status} for ${url}`);
+  }
 
-  const date = new Date(deadline);
-  if (Number.isNaN(date.getTime())) return Number.MAX_SAFE_INTEGER;
-
-  return date.getTime();
+  return await response.text();
 }
 
 async function notifyNewAds(newAds, env) {
-  const lines = newAds.map(formatAlertLine);
-  const message = lines.join("\n\n");
+  if (!env.ALERT_WEBHOOK_URL) return;
 
-  if (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) {
-    await sendTelegram(message, env.TELEGRAM_BOT_TOKEN, env.TELEGRAM_CHAT_ID);
-  }
-
-  if (env.RESEND_API_KEY && env.ALERT_EMAIL_TO && env.ALERT_EMAIL_FROM) {
-    await sendEmail(newAds, env);
-  }
-}
-
-function formatAlertLine(ad) {
-  return `[${ad.instituteType}] ${ad.institute} | ${ad.role} | ${ad.department} | Ad date ${ad.adDate || "Not stated"} | Deadline ${ad.deadline || "Not stated"} | ${ad.url}`;
-}
-
-async function sendTelegram(message, botToken, chatId) {
-  const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text: message,
-      disable_web_page_preview: true,
-    }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Telegram failed: ${response.status} ${text}`);
-  }
-}
-
-async function sendEmail(newAds, env) {
-  const subject = `${newAds.length} new IIT/NIT faculty alert${newAds.length > 1 ? "s" : ""}`;
-
-  const html = `
-    <h2>${escapeHtml(subject)}</h2>
-    <ul>
-      ${newAds.map((ad) => `<li>${escapeHtml(formatAlertLine(ad))}</li>`).join("")}
-    </ul>
-  `;
-
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.RESEND_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from: env.ALERT_EMAIL_FROM,
-      to: [env.ALERT_EMAIL_TO],
-      subject,
-      html,
-    }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Resend failed: ${response.status} ${text}`);
-  }
-}
-
-function dedupeAds(ads) {
-  const map = new Map();
-
-  for (const ad of ads) {
-    map.set(ad.id, ad);
-  }
-
-  return [...map.values()];
-}
-
-function makeId(input) {
-  let hash = 2166136261;
-
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
-  }
-
-  return `ad_${(hash >>> 0).toString(16)}`;
-}
-
-function toAbsoluteUrl(href, baseUrl) {
   try {
-    return new URL(href, baseUrl).toString();
+    await fetch(env.ALERT_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        subject: `New IIT/NIT faculty ads ${newAds.length}`,
+        count: newAds.length,
+        ads: newAds,
+      }),
+    });
+  } catch (error) {
+    console.error("Notification failed", error);
+  }
+}
+
+function json(payload, status = 200) {
+  return new Response(JSON.stringify(payload, null, 2), {
+    status,
+    headers: {
+      ...CORS_HEADERS,
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
+function safeUrl(href, base) {
+  try {
+    return new URL(href, base).toString();
   } catch {
     return null;
   }
 }
 
-function stripTags(html) {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
+function stripTags(input) {
+  return decodeHtml(String(input || "").replace(/<[^>]+>/g, " "));
+}
+
+function decodeHtml(input) {
+  return String(input || "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+function compactText(input) {
+  return String(input || "")
     .replace(/\s+/g, " ")
+    .replace(/\u00a0/g, " ")
     .trim();
 }
 
-function cleanText(text) {
-  return String(text).replace(/\s+/g, " ").trim();
+function extractAttr(attrs, name) {
+  const regex = new RegExp(`${name}\\s*=\\s*["']([^"']*)["']`, "i");
+  const match = attrs.match(regex);
+  return match ? decodeHtml(match[1]) : "";
 }
 
-function escapeHtml(text) {
-  return String(text)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+function fileNameFromUrl(url) {
+  try {
+    const u = new URL(url);
+    const last = u.pathname.split("/").filter(Boolean).pop();
+    return last || url;
+  } catch {
+    return url;
+  }
 }
 
-function json(data, status = 200) {
-  return new Response(JSON.stringify(data, null, 2), {
-    status,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      ...CORS_HEADERS,
-    },
-  });
+function computeEvidenceFingerprint(text, url) {
+  return stableId(`${pathStem(url)}||${compactText(text).slice(0, 500)}`);
+}
+
+function stableId(str) {
+  let hash = 2166136261;
+  for (let i = 0; i < str.length; i += 1) {
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `h${(hash >>> 0).toString(16)}`;
 }
