@@ -64,7 +64,7 @@ export const SOURCES = [
     institute: "IIT Madras",
     pageUrl: "https://facapp.iitm.ac.in/",
     pageType: "html-links",
-    batch: 1
+    batch: 0
   },
   {
     id: "iitkgp-faculty",
@@ -72,7 +72,7 @@ export const SOURCES = [
     institute: "IIT Kharagpur",
     pageUrl: "https://erp.iitkgp.ac.in/Jobs/auth/facapps.htm",
     pageType: "html-links",
-    batch: 2
+    batch: 0
   },
   {
     id: "iith-careers",
@@ -88,7 +88,7 @@ export const SOURCES = [
     institute: "IIT Dharwad",
     pageUrl: "https://www.iitdh.ac.in/faculty-recruitment",
     pageType: "html-links",
-    batch: 1
+    batch: 0
   },
   {
     id: "iitpkd-faculty",
@@ -96,7 +96,7 @@ export const SOURCES = [
     institute: "IIT Palakkad",
     pageUrl: "https://facap.iitpkd.ac.in/",
     pageType: "html-links",
-    batch: 2
+    batch: 0
   },
   {
     id: "iitgoa-faculty",
@@ -112,7 +112,7 @@ export const SOURCES = [
     institute: "IIT Bombay",
     pageUrl: "https://www.iitb.ac.in/en/careers/faculty-recruitment",
     pageType: "html-links",
-    batch: 1
+    batch: 0
   },
   // Missing IIT sources
   {
@@ -121,7 +121,7 @@ export const SOURCES = [
     institute: "IIT Kanpur",
     pageUrl: "https://www.iitk.ac.in/faculty-recruitment",
     pageType: "html-links",
-    batch: 2
+    batch: 0
   },
   {
     id: "iitr-faculty",
@@ -137,7 +137,7 @@ export const SOURCES = [
     institute: "IIT Guwahati",
     pageUrl: "https://iitg.ac.in/iitg_page_details?page=61%2Ffac_rec",
     pageType: "html-links",
-    batch: 1
+    batch: 0
   },
   {
     id: "iitj-faculty",
@@ -145,7 +145,7 @@ export const SOURCES = [
     institute: "IIT Jodhpur",
     pageUrl: "https://www.iitj.ac.in/faculty-positions/en/faculty-positions",
     pageType: "html-links",
-    batch: 2
+    batch: 0
   },
   {
     id: "iitrpr-faculty",
@@ -161,7 +161,7 @@ export const SOURCES = [
     institute: "IIT Patna",
     pageUrl: "https://www.iitp.ac.in/services-amenities/stores-and-purchase/archived-tenders?catid=18&id=2363%3Aadvertisement-for-faculty-positions-at-the-level-of-assistant-professor-associate-professor-and-professor-in-iit-patna&view=article",
     pageType: "html-links",
-    batch: 1
+    batch: 0
   },
   {
     id: "iiti-faculty",
@@ -169,7 +169,7 @@ export const SOURCES = [
     institute: "IIT Indore",
     pageUrl: "https://www.iiti.ac.in/recruitments/faculty-positions",
     pageType: "html-links",
-    batch: 2
+    batch: 0
   },
   {
     id: "iitmandi-faculty",
@@ -185,7 +185,7 @@ export const SOURCES = [
     institute: "IIT (BHU) Varanasi",
     pageUrl: "https://www.iitbhu.ac.in/dean/dofa/recruitment",
     pageType: "html-links",
-    batch: 1
+    batch: 0
   },
   {
     id: "iitbhilai-faculty",
@@ -193,7 +193,7 @@ export const SOURCES = [
     institute: "IIT Bhilai",
     pageUrl: "https://www.iitbhilai.ac.in/index.php?pid=rec_faculty",
     pageType: "html-links",
-    batch: 2
+    batch: 0
   },
   {
     id: "iitjammu-faculty",
@@ -209,7 +209,7 @@ export const SOURCES = [
     institute: "IIT Tirupati",
     pageUrl: "https://www.iittp.ac.in/facultyrecruitment",
     pageType: "html-links",
-    batch: 1
+    batch: 0
   },
   {
     id: "iitism-faculty",
@@ -217,7 +217,7 @@ export const SOURCES = [
     institute: "IIT (ISM) Dhanbad",
     pageUrl: "https://www.iitism.ac.in/faculty-positions",
     pageType: "html-links",
-    batch: 2
+    batch: 0
   },
   {
     id: "iitbbs-faculty",
@@ -233,7 +233,7 @@ export const SOURCES = [
     institute: "IIT Gandhinagar",
     pageUrl: "https://iitgn.ac.in/careers/faculty-rolling-advertisement",
     pageType: "html-links",
-    batch: 1
+    batch: 0
   },
   // NITs
   {
@@ -242,7 +242,7 @@ export const SOURCES = [
     institute: "NIT Rourkela",
     pageUrl: "https://www.nitrkl.ac.in/Career/Faculty/",
     pageType: "html-links",
-    batch: 2
+    batch: 0
   },
   {
     id: "nitw-faculty",
@@ -258,7 +258,7 @@ export const SOURCES = [
     institute: "NIT Tiruchirappalli",
     pageUrl: "https://www.nitt.edu/other/jobs",
     pageType: "html-links",
-    batch: 1
+    batch: 0
   },
   {
     id: "vnit-current-openings",
@@ -266,7 +266,7 @@ export const SOURCES = [
     institute: "VNIT Nagpur",
     pageUrl: "https://vnit.ac.in/position-open/",
     pageType: "html-links",
-    batch: 2
+    batch: 0
   },
   {
     id: "nitmz-recruitment-feed",
@@ -282,7 +282,7 @@ export const SOURCES = [
     institute: "NIT Kurukshetra",
     pageUrl: "https://nitkkr.ac.in/recruitment-notification-for-faculty-positions/",
     pageType: "html-links",
-    batch: 1
+    batch: 0
   },
   // Missing NIT sources
   {
@@ -291,7 +291,7 @@ export const SOURCES = [
     institute: "NIT Agartala",
     pageUrl: "https://www.nita.ac.in/UserPanel/Minutes_Others.aspx?file=Recruitment",
     pageType: "html-links",
-    batch: 2
+    batch: 0
   },
   {
     id: "nitap-andhra-faculty",
@@ -307,7 +307,7 @@ export const SOURCES = [
     institute: "NIT Arunachal Pradesh",
     pageUrl: "https://www.nitap.ac.in/category_list_details?cate=Recruitments",
     pageType: "html-links",
-    batch: 1
+    batch: 0
   },
   {
     id: "nitc-faculty",
@@ -315,7 +315,7 @@ export const SOURCES = [
     institute: "NIT Calicut",
     pageUrl: "https://nitc.ac.in/faculty-recruitments",
     pageType: "html-links",
-    batch: 2
+    batch: 0
   },
   {
     id: "nitdelhi-faculty",
@@ -331,7 +331,7 @@ export const SOURCES = [
     institute: "NIT Durgapur",
     pageUrl: "https://nitdgp.ac.in/p/careers",
     pageType: "html-links",
-    batch: 1
+    batch: 0
   },
   {
     id: "nitgoa-faculty",
@@ -339,7 +339,7 @@ export const SOURCES = [
     institute: "NIT Goa",
     pageUrl: "https://www.nitgoa.ac.in/careers.html",
     pageType: "html-links",
-    batch: 2
+    batch: 0
   },
   {
     id: "nith-faculty",
@@ -355,7 +355,7 @@ export const SOURCES = [
     institute: "NIT Jalandhar",
     pageUrl: "https://www.nitj.ac.in/research/jobs.html",
     pageType: "html-links",
-    batch: 1
+    batch: 0
   },
   {
     id: "nitjsr-faculty",
@@ -363,7 +363,7 @@ export const SOURCES = [
     institute: "NIT Jamshedpur",
     pageUrl: "https://www.nitjsr.ac.in/Recruitments",
     pageType: "html-links",
-    batch: 2
+    batch: 0
   },
   {
     id: "nitmanipur-faculty",
@@ -379,7 +379,7 @@ export const SOURCES = [
     institute: "NIT Meghalaya",
     pageUrl: "https://www.nitm.ac.in/news.php?n=recruitment",
     pageType: "html-links",
-    batch: 1
+    batch: 0
   },
   {
     id: "nitnagaland-faculty",
@@ -387,7 +387,7 @@ export const SOURCES = [
     institute: "NIT Nagaland",
     pageUrl: "https://www.nitnagaland.ac.in/index.php/recruitment",
     pageType: "html-links",
-    batch: 2
+    batch: 0
   },
   {
     id: "nitp-faculty",
@@ -403,7 +403,7 @@ export const SOURCES = [
     institute: "NIT Puducherry",
     pageUrl: "https://nitpy.ac.in/Opportunities",
     pageType: "html-links",
-    batch: 1
+    batch: 0
   },
   {
     id: "nitrr-faculty",
@@ -411,7 +411,7 @@ export const SOURCES = [
     institute: "NIT Raipur",
     pageUrl: "https://www.nitrr.ac.in/advertisement.php",
     pageType: "html-links",
-    batch: 2
+    batch: 0
   },
   {
     id: "nitsikkim-faculty",
@@ -427,7 +427,7 @@ export const SOURCES = [
     institute: "NIT Silchar",
     pageUrl: "https://www.nits.ac.in/recruitment-view-all",
     pageType: "html-links",
-    batch: 1
+    batch: 0
   },
   {
     id: "nitsri-faculty",
@@ -435,7 +435,7 @@ export const SOURCES = [
     institute: "NIT Srinagar",
     pageUrl: "https://nitsri.ac.in/Pages/JobsMain.aspx",
     pageType: "html-links",
-    batch: 2
+    batch: 0
   },
   {
     id: "nitk-faculty",
@@ -451,6 +451,6 @@ export const SOURCES = [
     institute: "NIT Uttarakhand",
     pageUrl: "https://nituk.ac.in/recruitments",
     pageType: "html-links",
-    batch: 1
+    batch: 0
   }
 ];
