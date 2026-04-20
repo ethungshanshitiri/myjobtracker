@@ -158,6 +158,7 @@ function renderInstituteCard(group) {
   const roleSummary = summarizeRoles([...group.roles]);
   const departmentSummary = summarizeDepartments([...group.departments]);
   const deadline = group.bestNotice?.deadline || "Not stated";
+  const adDate = group.bestNotice?.adDate || "Not stated";
   const link = group.bestNotice?.url || "#";
 
   return `
@@ -167,6 +168,7 @@ function renderInstituteCard(group) {
         <div class="deadline">Deadline ${escapeHtml(deadline)}</div>
       </div>
       <h3>${escapeHtml(group.institute)}</h3>
+      <p><strong>Posted:</strong> ${escapeHtml(adDate)}</p>
       <p><strong>${escapeHtml(roleSummary)}</strong></p>
       <p>${escapeHtml(departmentSummary)}</p>
       <p><a href="${escapeAttribute(link)}" target="_blank" rel="noopener noreferrer">Open advertisement</a></p>

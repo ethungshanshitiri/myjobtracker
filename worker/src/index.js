@@ -14,6 +14,7 @@ const MAX_PDF_PAGES = 6;
 const MAX_ANCHORS_PER_PAGE = 120;
 const MAX_EVIDENCE_ITEMS_PER_SOURCE = 80;
 const ACTIVE_WITHOUT_DEADLINE_DAYS = 21;
+const MAX_AD_AGE_DAYS_WITHOUT_DEADLINE = 180;
 const BATCH_COUNT = 12;
 
 const ROLE_RULES = [
@@ -686,8 +687,11 @@ function buildBundleFromCluster(cluster, source) {
   const mergedText = compactText(cluster.items.map((i) => i.text).join(" "));
   const roles = extractRoles(mergedText);
   const departments = extractDepartments(mergedText);
+  const hasRoleDepartmentSignal = cluster.items.some(
+    (item) => (item.roles || []).length > 0 && (item.departments || []).length > 0
+  );
 
-  if (roles.length === 0 || departments.length === 0) {
+  if (roles.length === 0 || departments.length === 0 || !hasRoleDepartmentSignal) {
     return null;
   }
 
@@ -844,10 +848,40 @@ function isBundleActive(bundle, now = new Date()) {
   const cutoff = new Date(now);
   cutoff.setDate(cutoff.getDate() - ACTIVE_WITHOUT_DEADLINE_DAYS);
 
-  return lastSeen >= cutoff;
+  if (lastSeen < cutoff) {
+    return false;
+  }
+
+  // Prevent very old ads without a clear deadline from staying active forever.
+  const adDate = parseDateForComparison(bundle.adDate);
+  if (adDate && !isLikelyRollingAd(bundle)) {
+    const adAgeCutoff = new Date(now);
+    adAgeCutoff.setDate(adAgeCutoff.getDate() - MAX_AD_AGE_DAYS_WITHOUT_DEADLINE);
+    if (adDate < adAgeCutoff) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function isLikelyRollingAd(bundle) {
+  const text = compactText(
+    [bundle?.title, bundle?.summary, bundle?.textSample].filter(Boolean).join(" ")
+  ).toLowerCase();
+
+  if (!text) return false;
+
+  return /\b(rolling|round the year|throughout the year|open until filled|open till filled)\b/i.test(text);
 }
 
 function toApiAd(bundle) {
+  const deadline = bundle.deadline
+    ? bundle.deadline
+    : isLikelyRollingAd(bundle)
+      ? "Rolling"
+      : "Not stated";
+
   return {
     id: bundle.id,
     instituteType: bundle.instituteType,
@@ -855,7 +889,7 @@ function toApiAd(bundle) {
     role: bundle.role || "Not stated",
     department: bundle.department || "Not stated",
     adDate: bundle.adDate || "Not stated",
-    deadline: bundle.deadline || "Not stated",
+    deadline,
     url: bundle.url || bundle.sourceUrl,
     title: bundle.title || "",
     sourceUrl: bundle.sourceUrl || "",
@@ -965,8 +999,8 @@ function extractAdDate(text) {
 
 function extractDeadline(text) {
   const patterns = [
-    /\b(?:last date(?: for .*?)?|closing date|closing on|deadline|last\s+date\s+for\s+submission|last date of receipt of application(?:s)?|last date to apply|apply by)\s*[:\-]?\s*([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{2,4}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})\b/i,
-    /\b(?:applications? .*? accepted .*? till)\s*([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{2,4}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})\b/i,
+    /\b(?:last date(?: for .*?)?|closing date|closing on|deadline|last\s+date\s+for\s+submission|last date of receipt of application(?:s)?|last date to apply|apply by|applications?\s+will\s+be\s+accepted\s+(?:up\s+to|upto|until|till)|apply\s+on\s+or\s+before)\s*[:\-]?\s*([0-9]{1,2}(?:st|nd|rd|th)?[./\s-]+[0-9]{1,2}[./-][0-9]{2,4}|[0-9]{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9},?\s+[0-9]{4}|[A-Za-z]{3,9}\s+[0-9]{1,2}(?:st|nd|rd|th)?,?\s+[0-9]{4}|[0-9]{4}[./-][0-9]{1,2}[./-][0-9]{1,2})\b/i,
+    /\b(?:applications? .*? accepted .*? till)\s*([0-9]{1,2}(?:st|nd|rd|th)?[./\s-]+[0-9]{1,2}[./-][0-9]{2,4}|[0-9]{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9},?\s+[0-9]{4}|[A-Za-z]{3,9}\s+[0-9]{1,2}(?:st|nd|rd|th)?,?\s+[0-9]{4}|[0-9]{4}[./-][0-9]{1,2}[./-][0-9]{1,2})\b/i,
   ];
 
   for (const pattern of patterns) {
@@ -990,7 +1024,8 @@ function extractDeadline(text) {
 
 function extractAllCandidateDates(text) {
   const matches = [];
-  const regex = /\b([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{2,4}|[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})\b/g;
+  const regex =
+    /\b([0-9]{1,2}(?:st|nd|rd|th)?[./-][0-9]{1,2}[./-][0-9]{2,4}|[0-9]{4}[./-][0-9]{1,2}[./-][0-9]{1,2}|[0-9]{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9},?\s+[0-9]{4}|[A-Za-z]{3,9}\s+[0-9]{1,2}(?:st|nd|rd|th)?,?\s+[0-9]{4})\b/g;
   for (const match of text.matchAll(regex)) {
     const normalized = normalizeDate(match[1]);
     if (normalized) matches.push(normalized);
@@ -1018,7 +1053,10 @@ function parseDateForComparison(raw) {
   if (!raw) return null;
   if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? null : raw;
 
-  const trimmed = String(raw).trim();
+  const trimmed = String(raw)
+    .trim()
+    .replace(/(\d)(st|nd|rd|th)\b/gi, "$1")
+    .replace(/,\s*/g, " ");
   if (!trimmed) return null;
 
   if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
@@ -1026,7 +1064,7 @@ function parseDateForComparison(raw) {
     return Number.isNaN(d.getTime()) ? null : d;
   }
 
-  if (/^\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}$/.test(trimmed)) {
+  if (/^\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}$/.test(trimmed) || /^[A-Za-z]{3,9}\s+\d{1,2}\s+\d{4}$/.test(trimmed)) {
     const d = new Date(trimmed);
     return Number.isNaN(d.getTime()) ? null : d;
   }
@@ -1035,7 +1073,15 @@ function parseDateForComparison(raw) {
   const parts = cleaned.split("/");
   if (parts.length !== 3) return null;
 
-  let [dd, mm, yyyy] = parts;
+  let [p1, p2, p3] = parts;
+  let dd = p1;
+  let mm = p2;
+  let yyyy = p3;
+  if (p1.length === 4) {
+    yyyy = p1;
+    mm = p2;
+    dd = p3;
+  }
   if (yyyy.length === 2) yyyy = `20${yyyy}`;
 
   const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
