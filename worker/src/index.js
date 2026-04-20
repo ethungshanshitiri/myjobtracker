@@ -687,8 +687,11 @@ function buildBundleFromCluster(cluster, source) {
   const mergedText = compactText(cluster.items.map((i) => i.text).join(" "));
   const roles = extractRoles(mergedText);
   const departments = extractDepartments(mergedText);
+  const hasRoleDepartmentSignal = cluster.items.some(
+    (item) => (item.roles || []).length > 0 && (item.departments || []).length > 0
+  );
 
-  if (roles.length === 0 || departments.length === 0) {
+  if (roles.length === 0 || departments.length === 0 || !hasRoleDepartmentSignal) {
     return null;
   }
 

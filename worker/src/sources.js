@@ -18,7 +18,8 @@ export const DEPARTMENT_RULES = [
     patterns: [
       /\belectrical and electronics engineering\b/i,
       /\bdepartment of electrical and electronics engineering\b/i,
-      /\beee\b/i
+      /\belectrical\s*&\s*electronics\s*engineering\b/i,
+      /\b(?:department|dept\.?|school)\s+of\s+eee\b/i
     ]
   },
   {
@@ -28,7 +29,7 @@ export const DEPARTMENT_RULES = [
       /\belectronics and communications engineering\b/i,
       /\bdepartment of electronics and communication engineering\b/i,
       /\bdepartment of electronics and communications engineering\b/i,
-      /\bece\b/i
+      /\b(?:department|dept\.?|school)\s+of\s+ece\b/i
     ]
   },
   {
@@ -36,7 +37,7 @@ export const DEPARTMENT_RULES = [
     patterns: [
       /\bcomputer science and engineering\b/i,
       /\bdepartment of computer science and engineering\b/i,
-      /\bcse\b/i
+      /\b(?:department|dept\.?|school)\s+of\s+cse\b/i
     ]
   },
   {
